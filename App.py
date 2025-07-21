@@ -21,7 +21,7 @@ if 'clip_model' not in st.session_state:
 st.set_page_config(page_title="CIB Monitoring Dashboard", layout="wide")
 st.title("🕵️ CIB monitoring and analysis Dashboard")
 
-# --- Sidebar: Upload and Settings ---
+# --- Sidebar Upload ---
 st.sidebar.header("📂 Upload Social Media Files")
 uploaded_files = st.sidebar.file_uploader("Upload multiple CSV/Excel files", type=['csv', 'xlsx'], accept_multiple_files=True)
 
@@ -47,28 +47,21 @@ if uploaded_files:
         else:
             dfs.append(pd.read_excel(file))
     combined_df = pd.concat(dfs, ignore_index=True)
+else:
+    st.warning("No files uploaded. Loading default dataset...")
+    try:
+        default_url = "https://raw.githubusercontent.com/your-username/your-repo-name/main/data/default_dataset.csv"
+        combined_df = pd.read_csv(default_url)
+        st.success("✅ Default dataset loaded from GitHub.")
+    except Exception as e:
+        st.error(f"⚠️ Failed to load default dataset: {e}")
 
+if not combined_df.empty:
     if 'text' in combined_df.columns:
         combined_df['text'] = combined_df['text'].astype(str).apply(clean_text)
-
     if 'Timestamp' in combined_df.columns:
         combined_df['Timestamp'] = pd.to_datetime(combined_df['Timestamp'], errors='coerce')
-
     st.session_state['combined_df'] = combined_df
-
-# --- Load default dataset if no uploads ---
-if not uploaded_files and 'combined_df' not in st.session_state:
-    default_path = "data/default_dataset.csv"
-    if os.path.exists(default_path):
-        st.info("📁 No files uploaded. Using default dataset.")
-        combined_df = pd.read_csv(default_path)
-        if 'text' in combined_df.columns:
-            combined_df['text'] = combined_df['text'].astype(str).apply(clean_text)
-        if 'Timestamp' in combined_df.columns:
-            combined_df['Timestamp'] = pd.to_datetime(combined_df['Timestamp'], errors='coerce')
-        st.session_state['combined_df'] = combined_df
-    else:
-        st.warning("⚠️ No uploaded or default dataset found.")
 
 # --- Tabs ---
 tab1, tab2, tab3 = st.tabs(["📊 Dashboard", "🧠 CLIP Visual Coordination", "📎 About"])
@@ -141,11 +134,7 @@ with tab2:
             st.warning("No image URLs found in posts.")
         else:
             with st.spinner("Downloading and embedding images..."):
-                image_embeddings, valid_images = generate_image_embeddings(
-                    image_urls,
-                    st.session_state.clip_model,
-                    st.session_state.clip_preprocess
-                )
+                image_embeddings, valid_images = generate_image_embeddings(image_urls, st.session_state.clip_model, st.session_state.clip_preprocess)
 
             st.markdown(f"**{len(valid_images)}** images embedded.")
 
