@@ -2,22 +2,26 @@ import streamlit as st
 import pandas as pd
 import torch
 from PIL import Image
-import os
 import re
-import tempfile
+import os
 from modules.embedding_utils import compute_clip_similarity, load_clip_model
-from modules.image_tools import extract_image_features, select_image_from_text
+from modules.image_tools import (
+    extract_image_features, select_image_from_text,
+    download_image_from_url, compute_clip_image_embedding
+)
 from modules.translation_utils import translate_query
+from sklearn.metrics.pairwise import cosine_similarity
+from sklearn.cluster import DBSCAN
+import numpy as np
 
-# Initialize session state
+st.set_page_config(page_title="CIB Coordination Dashboard", layout="wide")
+st.title("🕵️ Coordinated Influence Operations Dashboard")
+
+# Initialize CLIP model in session state
 if 'clip_model' not in st.session_state:
     st.session_state.clip_model, st.session_state.clip_preprocess = load_clip_model()
 
-st.set_page_config(page_title="CIB Coordination Dashboard", layout="wide")
-
-st.title("🕵️ Coordinated Influence Operations Dashboard")
-
-# --- Sidebar: Upload and Settings ---
+# --- Sidebar ---
 st.sidebar.header("📂 Upload Social Media Files")
 uploaded_files = st.sidebar.file_uploader("Upload multiple CSV/Excel files", type=['csv', 'xlsx'], accept_multiple_files=True)
 
@@ -31,12 +35,67 @@ user_query = st.sidebar.text_input("Enter your query (any language)")
 use_translation = st.sidebar.checkbox("Translate Query to English", value=True)
 translated_query = translate_query(user_query) if use_translation and user_query else user_query
 
-# --- Main Panel ---
-tab1, tab2, tab3 = st.tabs(["📊 Dashboard", "🧠 CLIP Visual/Text Similarity", "📎 About"])
+# --- Utility Functions ---
+def clean_text(text):
+    text = str(text).lower()
+    text = re.sub(r"http\S+", "", text)
+    text = re.sub(r"[@#]\w+", "", text)
+    text = re.sub(r"[^a-zA-Z0-9\s]", "", text)
+    return text
+
+def extract_image_urls(df):
+    url_cols = ['media', 'media_url', 'attachments', 'media_links']
+    image_urls = []
+    for _, row in df.iterrows():
+        for col in url_cols:
+            val = row.get(col, '')
+            if isinstance(val, str) and any(x in val for x in ['.jpg', '.png', '.jpeg']):
+                image_urls.append(val)
+                break
+        else:
+            image_urls.append(None)
+    df['image_url'] = image_urls
+    return df
+
+@st.cache_data(show_spinner=False)
+def get_clip_embeddings(df):
+    embeddings = []
+    for url in df['image_url']:
+        if url:
+            image = download_image_from_url(url)
+            if image:
+                emb = compute_clip_image_embedding(
+                    image, st.session_state.clip_model, st.session_state.clip_preprocess
+                )
+                embeddings.append(emb)
+            else:
+                embeddings.append(None)
+        else:
+            embeddings.append(None)
+    df['image_embedding'] = embeddings
+    return df
+
+def cluster_image_embeddings(df, eps=0.15, min_samples=2):
+    image_vecs = [e for e in df['image_embedding'] if e is not None]
+    index_map = [i for i, e in enumerate(df['image_embedding']) if e is not None]
+    if not image_vecs:
+        df['image_cluster'] = -1
+        return df
+    embeddings = np.vstack(image_vecs)
+    sim_matrix = cosine_similarity(embeddings)
+    clustering = DBSCAN(metric='precomputed', eps=1 - eps, min_samples=min_samples)
+    labels = clustering.fit_predict(1 - sim_matrix)
+    cluster_labels = [-1] * len(df)
+    for idx, label in zip(index_map, labels):
+        cluster_labels[idx] = label
+    df['image_cluster'] = cluster_labels
+    return df
+
+# --- Tabs ---
+tab1, tab2, tab3 = st.tabs(["📊 Dashboard", "📸 Visual Coordination", "📎 About"])
 
 with tab1:
     st.subheader("1. Upload & Preprocess Data")
-
     if uploaded_files:
         dfs = []
         for file in uploaded_files:
@@ -46,16 +105,11 @@ with tab1:
                 dfs.append(pd.read_excel(file))
         combined_df = pd.concat(dfs, ignore_index=True)
 
-        # Basic preprocessing
-        def clean_text(text):
-            text = str(text).lower()
-            text = re.sub(r"http\S+", "", text)
-            text = re.sub(r"[@#]\w+", "", text)
-            text = re.sub(r"[^a-zA-Z0-9\s]", "", text)
-            return text
-
         combined_df['text'] = combined_df['text'].astype(str).apply(clean_text)
         combined_df['Timestamp'] = pd.to_datetime(combined_df['Timestamp'], errors='coerce')
+
+        combined_df = extract_image_urls(combined_df)
+        st.session_state['combined_df'] = combined_df
 
         st.success("✅ Data loaded and cleaned!")
         st.dataframe(combined_df.head())
@@ -72,38 +126,45 @@ with tab1:
             st.markdown("**Top Hashtags**")
             st.bar_chart(top_hashtags)
 
+        csv_export = combined_df.to_csv(index=False).encode('utf-8')
+        st.download_button("📥 Download Processed Data", csv_export, "processed_data.csv", "text/csv")
+
 with tab2:
-    st.subheader("Visual ↔ Text Similarity Search (via CLIP)")
+    st.subheader("📸 Visual Coordination Detection")
+    combined_df = st.session_state.get('combined_df', pd.DataFrame())
+    if not combined_df.empty and 'image_url' in combined_df.columns:
+        with st.spinner("Processing media and computing visual embeddings..."):
+            combined_df = get_clip_embeddings(combined_df)
+            combined_df = cluster_image_embeddings(combined_df, eps=1 - similarity_threshold)
 
-    uploaded_image = st.file_uploader("Upload an image (e.g., meme or screenshot)", type=["png", "jpg", "jpeg"])
+        cluster_counts = combined_df['image_cluster'].value_counts()
+        coordinated_clusters = cluster_counts[cluster_counts > 1].index.tolist()
 
-    if uploaded_image and not combined_df.empty:
-        with st.spinner("Computing image-text similarity..."):
-            image = Image.open(uploaded_image).convert("RGB")
-            texts = combined_df['text'].tolist()
-
-            top_texts = compute_clip_similarity(image, texts, st.session_state.clip_model, st.session_state.clip_preprocess, top_k=5)
-
-        st.image(image, caption="Uploaded Image", use_column_width=True)
-        st.markdown("**Top Matching Text Posts**")
-        for score, match_text in top_texts:
-            st.markdown(f"**Score:** `{score:.4f}`\n\n>{match_text}")
-
-    elif uploaded_image:
-        st.warning("Please upload social media data first in the Dashboard tab.")
+        if coordinated_clusters:
+            st.success(f"Found {len(coordinated_clusters)} visually coordinated clusters!")
+            for cluster_id in coordinated_clusters:
+                st.markdown(f"### Cluster {cluster_id}")
+                cluster_df = combined_df[combined_df['image_cluster'] == cluster_id]
+                for _, row in cluster_df.iterrows():
+                    if row['image_url']:
+                        st.image(row['image_url'], width=200, caption=row.get('text', ''))
+                        st.caption(f"{row.get('Timestamp')} | {row.get('Source')}")
+        else:
+            st.info("No visually coordinated image clusters found.")
+    else:
+        st.warning("Please upload social media data with image URLs.")
 
 with tab3:
     st.markdown("""
     ### 🔍 Overview
 
-    This dashboard is designed to help investigate coordinated influence behavior across multiple social media platforms.
+    This dashboard helps data journalists investigate coordinated influence behavior across social platforms.
 
     **Features:**
     - Upload & merge multi-platform datasets
-    - CLIP-based visual-to-text similarity detection
+    - Text & CLIP-based visual similarity
     - Multilingual query translation
-    - Similarity slider + exact-match toggle
+    - Image-to-image clustering and visual coordination detection
 
-    **Powered by**: OpenAI CLIP, HuggingFace Transformers, Streamlit
+    **Inspired by Vera.AI & Powered by OpenAI CLIP + Streamlit**
     """)
-
