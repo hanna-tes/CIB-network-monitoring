@@ -1,145 +1,109 @@
 import streamlit as st
 import pandas as pd
-import numpy as np
-import matplotlib.pyplot as plt
-import seaborn as sns
-import altair as alt
-import networkx as nx
-from io import StringIO
-from datetime import datetime, timedelta
-from collections import Counter
+import torch
+from PIL import Image
+import os
 import re
-import base64
 import tempfile
+from modules.embedding_utils import compute_clip_similarity, load_clip_model
+from modules.image_tools import extract_image_features, select_image_from_text
+from modules.translation_utils import translate_query
 
-st.set_page_config(page_title="Coordinated Sharing Detector", layout="wide")
-st.title("🔍 Coordinated Sharing Detector")
+# Initialize session state
+if 'clip_model' not in st.session_state:
+    st.session_state.clip_model, st.session_state.clip_preprocess = load_clip_model()
 
-# Sidebar
-st.sidebar.header("Upload Dataset")
-uploaded_file = st.sidebar.file_uploader("Choose a CSV or Excel file", type=["csv", "xlsx"])
-default_dataset = st.sidebar.checkbox("Use default dataset")
+st.set_page_config(page_title="CIB Coordination Dashboard", layout="wide")
 
-# Helper functions
-def extract_hashtags(text):
-    return re.findall(r"#(\w+)", text)
+st.title("🕵️ Coordinated Influence Operations Dashboard")
 
-def extract_mentions(text):
-    return re.findall(r"@(\w+)", text)
+# --- Sidebar: Upload and Settings ---
+st.sidebar.header("📂 Upload Social Media Files")
+uploaded_files = st.sidebar.file_uploader("Upload multiple CSV/Excel files", type=['csv', 'xlsx'], accept_multiple_files=True)
 
-def extract_urls(text):
-    return re.findall(r"https?://\S+", text)
+st.sidebar.markdown("---")
+similarity_threshold = st.sidebar.slider("🔍 Similarity Threshold", 0.0, 1.0, 0.75, 0.01)
+exact_match_toggle = st.sidebar.checkbox("✅ Exact Text Match Only", value=False)
 
-# Load and process data
-if uploaded_file or default_dataset:
-    try:
-        if default_dataset:
-            df = pd.read_csv("data/example_social_data.csv")
-        elif uploaded_file.name.endswith(".csv"):
-            df = pd.read_csv(uploaded_file)
-        else:
-            df = pd.read_excel(uploaded_file)
+st.sidebar.markdown("---")
+st.sidebar.header("🌐 Multilingual Query")
+user_query = st.sidebar.text_input("Enter your query (any language)")
+use_translation = st.sidebar.checkbox("Translate Query to English", value=True)
+translated_query = translate_query(user_query) if use_translation and user_query else user_query
 
-        df.columns = df.columns.str.lower()
-        if 'timestamp' not in df.columns:
-            st.error("Dataset must contain a 'timestamp' column.")
-        else:
-            df['timestamp'] = pd.to_datetime(df['timestamp'])
-            df['date'] = df['timestamp'].dt.date
-            df['hour'] = df['timestamp'].dt.hour
+# --- Main Panel ---
+tab1, tab2, tab3 = st.tabs(["📊 Dashboard", "🧠 CLIP Visual/Text Similarity", "📎 About"])
 
-            if 'text' in df.columns:
-                df['hashtags'] = df['text'].apply(lambda x: extract_hashtags(str(x)))
-                df['mentions'] = df['text'].apply(lambda x: extract_mentions(str(x)))
-                df['urls'] = df['text'].apply(lambda x: extract_urls(str(x)))
+with tab1:
+    st.subheader("1. Upload & Preprocess Data")
+
+    if uploaded_files:
+        dfs = []
+        for file in uploaded_files:
+            if file.name.endswith('.csv'):
+                dfs.append(pd.read_csv(file))
             else:
-                st.warning("'text' column not found. Hashtags, mentions, and URLs won't be extracted.")
+                dfs.append(pd.read_excel(file))
+        combined_df = pd.concat(dfs, ignore_index=True)
 
-            # Summary Stats
-            st.subheader("📊 Summary Statistics")
-            col1, col2, col3 = st.columns(3)
-            with col1:
-                st.metric("Total Posts", len(df))
-            with col2:
-                st.metric("Unique Users", df['user_id'].nunique() if 'user_id' in df.columns else "N/A")
-            with col3:
-                st.metric("Time Range", f"{df['timestamp'].min().date()} to {df['timestamp'].max().date()}")
+        # Basic preprocessing
+        def clean_text(text):
+            text = str(text).lower()
+            text = re.sub(r"http\S+", "", text)
+            text = re.sub(r"[@#]\w+", "", text)
+            text = re.sub(r"[^a-zA-Z0-9\s]", "", text)
+            return text
 
-            # Top entities
-            st.markdown("---")
-            st.subheader("🔗 Top Shared Entities")
-            if 'user_id' in df.columns:
-                st.write("**Top Users:**")
-                st.dataframe(df['user_id'].value_counts().head(10))
-            if 'hashtags' in df.columns:
-                all_hashtags = sum(df['hashtags'], [])
-                st.write("**Top Hashtags:**")
-                st.dataframe(pd.Series(all_hashtags).value_counts().head(10))
-            if 'urls' in df.columns:
-                all_urls = sum(df['urls'], [])
-                st.write("**Top URLs:**")
-                st.dataframe(pd.Series(all_urls).value_counts().head(10))
+        combined_df['text'] = combined_df['text'].astype(str).apply(clean_text)
+        combined_df['Timestamp'] = pd.to_datetime(combined_df['Timestamp'], errors='coerce')
 
-            # Temporal visualization
-            st.markdown("---")
-            st.subheader("🗓 Temporal Posting Patterns")
-            daily_counts = df.groupby('date').size().reset_index(name='counts')
-            chart = alt.Chart(daily_counts).mark_line(point=True).encode(
-                x='date:T',
-                y='counts:Q',
-                tooltip=['date:T', 'counts']
-            ).properties(width=700, height=300)
-            st.altair_chart(chart, use_container_width=True)
+        st.success("✅ Data loaded and cleaned!")
+        st.dataframe(combined_df.head())
 
-            # Coordination detection
-            st.markdown("---")
-            st.subheader("🧪 Coordination Heuristics")
-            if 'urls' in df.columns:
-                window_sec = st.slider("Time window for coordination (seconds):", 1, 300, 30)
-                suspicious = []
-                grouped = df.explode('urls').dropna(subset=['urls'])
-                for url in grouped['urls'].unique():
-                    subset = grouped[grouped['urls'] == url].sort_values('timestamp')
-                    times = subset['timestamp'].values
-                    for i in range(len(times) - 1):
-                        delta = (times[i+1] - times[i]) / np.timedelta64(1, 's')
-                        if delta <= window_sec:
-                            suspicious.append((url, subset.iloc[i]['user_id'], subset.iloc[i+1]['user_id'], times[i], times[i+1]))
-                if suspicious:
-                    st.write("**Detected coordinated URL sharing:**")
-                    coord_df = pd.DataFrame(suspicious, columns=['URL', 'User A', 'User B', 'Time A', 'Time B'])
-                    st.dataframe(coord_df)
-                else:
-                    st.success("No coordinated sharing detected within selected window.")
+        st.subheader("2. Summary Statistics")
+        st.markdown(f"**Total Posts:** {len(combined_df)}")
+        st.markdown(f"**Unique Users:** {combined_df['Source'].nunique()}")
+        st.markdown(f"**Time Range:** {combined_df['Timestamp'].min()} → {combined_df['Timestamp'].max()}")
 
-            # Network graph
-            st.markdown("---")
-            st.subheader("🖥 Network Graph (User Mentions)")
-            if 'mentions' in df.columns and 'user_id' in df.columns:
-                G = nx.DiGraph()
-                for _, row in df.iterrows():
-                    user = row['user_id']
-                    for mention in row['mentions']:
-                        G.add_edge(user, mention)
-                if G.number_of_edges() > 0:
-                    st.write(f"Graph has {G.number_of_nodes()} nodes and {G.number_of_edges()} edges")
-                    pos = nx.spring_layout(G, k=0.15, iterations=20)
-                    fig, ax = plt.subplots(figsize=(10, 6))
-                    nx.draw(G, pos, with_labels=True, node_size=500, node_color='lightblue', ax=ax, font_size=8)
-                    st.pyplot(fig)
-                else:
-                    st.warning("Not enough mention data to create graph.")
+        if 'hashtags' in combined_df.columns:
+            hashtags_series = combined_df['hashtags'].dropna().astype(str).str.split()
+            all_hashtags = [tag for sublist in hashtags_series for tag in sublist]
+            top_hashtags = pd.Series(all_hashtags).value_counts().head(10)
+            st.markdown("**Top Hashtags**")
+            st.bar_chart(top_hashtags)
 
-            # Export tools
-            st.markdown("---")
-            st.subheader("📥 Export Findings")
-            if 'coord_df' in locals():
-                csv = coord_df.to_csv(index=False)
-                b64 = base64.b64encode(csv.encode()).decode()
-                href = f'<a href="data:file/csv;base64,{b64}" download="coordination_findings.csv">Download Coordinated Sharing CSV</a>'
-                st.markdown(href, unsafe_allow_html=True)
+with tab2:
+    st.subheader("Visual ↔ Text Similarity Search (via CLIP)")
 
-    except Exception as e:
-        st.error(f"Failed to process file: {e}")
-else:
-    st.info("Please upload a dataset or use the default dataset to begin analysis.")
+    uploaded_image = st.file_uploader("Upload an image (e.g., meme or screenshot)", type=["png", "jpg", "jpeg"])
+
+    if uploaded_image and not combined_df.empty:
+        with st.spinner("Computing image-text similarity..."):
+            image = Image.open(uploaded_image).convert("RGB")
+            texts = combined_df['text'].tolist()
+
+            top_texts = compute_clip_similarity(image, texts, st.session_state.clip_model, st.session_state.clip_preprocess, top_k=5)
+
+        st.image(image, caption="Uploaded Image", use_column_width=True)
+        st.markdown("**Top Matching Text Posts**")
+        for score, match_text in top_texts:
+            st.markdown(f"**Score:** `{score:.4f}`\n\n>{match_text}")
+
+    elif uploaded_image:
+        st.warning("Please upload social media data first in the Dashboard tab.")
+
+with tab3:
+    st.markdown("""
+    ### 🔍 Overview
+
+    This dashboard is designed to help investigate coordinated influence behavior across multiple social media platforms.
+
+    **Features:**
+    - Upload & merge multi-platform datasets
+    - CLIP-based visual-to-text similarity detection
+    - Multilingual query translation
+    - Similarity slider + exact-match toggle
+
+    **Powered by**: OpenAI CLIP, HuggingFace Transformers, Streamlit
+    """)
+
