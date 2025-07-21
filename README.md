@@ -13,6 +13,8 @@ A Streamlit-based dashboard to analyze social media data and detect patterns of 
 - Detect coordination via:
   - Shared URLs posted in quick succession
   - Hashtag/content overlap
+  - Visual and visual–text similarity via CLIP
+  - Multilingual search with translation caching
 - Explore interactive user interaction networks
 - Export visualizations and findings
 
