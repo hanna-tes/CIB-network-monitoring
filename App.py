@@ -15,8 +15,8 @@ from modules.image_tools import extract_image_urls
 from modules.clustering_utils import cluster_embeddings
 
 # Initialize session state
-st.set_page_config(page_title="CIB Coordination Dashboard", layout="wide")
-st.title("🕵️ Coordinated Inauthentic Behavior (CIB) Dashboard")
+st.set_page_config(page_title="CIB Monitoring Dashboard", layout="wide")
+st.title("🕵️ CIB monitoring and analysis Dashboard")
 
 # --- Sidebar: Upload and Settings ---
 st.sidebar.header("📂 Upload Social Media Files")
@@ -36,20 +36,25 @@ def clean_text(text):
 
 combined_df = pd.DataFrame()
 
+# ✅ Replace with your actual raw CSV URL
 default_url = "https://raw.githubusercontent.com/yourusername/yourrepo/main/data/default_dataset.csv"
 
 try:
-    combined_df = pd.read_csv(default_url, encoding='utf-16', sep='\t',low_memory=False')
+    combined_df = pd.read_csv(default_url, encoding='utf-16', sep='\t', on_bad_lines='skip', low_memory=False)
 except Exception as e:
     st.warning(f"Failed to load default dataset: {e}")
 
+# Merge user-uploaded data if available
 if uploaded_files:
     dfs = []
     for file in uploaded_files:
-        if file.name.endswith('.csv'):
-            dfs.append(pd.read_csv(file, encoding='utf-16', sep='\t',low_memory=False'))
-        else:
-            dfs.append(pd.read_excel(file))
+        try:
+            if file.name.endswith('.csv'):
+                dfs.append(pd.read_csv(file, encoding='utf-16', on_bad_lines='skip', sep='\t', on_bad_lines='skip'))
+            else:
+                dfs.append(pd.read_excel(file))
+        except Exception as e:
+            st.error(f"Error loading {file.name}: {e}")
     combined_df = pd.concat(dfs, ignore_index=True)
 
 if not combined_df.empty:
@@ -141,13 +146,4 @@ with tab3:
 
     This tool supports detection of **Coordinated Inauthentic Behavior (CIB)** across multiple social platforms.
 
-    **Key Features:**
-    - Upload & preprocess CSV/Excel data
-    - Merge multiple datasets
-    - Posting timeline and top users
-    - Shared URL repost detection
-    - CLIP removed: now using simple text similarity detection
-    - Coming soon: user interaction networks and exportable reports
-
-    🧠 Powered by: OpenAI · HuggingFace · Streamlit
     """)
