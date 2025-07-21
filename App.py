@@ -50,7 +50,7 @@ if uploaded_files:
     for file in uploaded_files:
         try:
             if file.name.endswith('.csv'):
-                dfs.append(pd.read_csv(file, encoding='utf-16', on_bad_lines='skip', sep='\t', on_bad_lines='skip'))
+                dfs.append(pd.read_csv(file, encoding='utf-16', on_bad_lines='skip', sep='\t'))
             else:
                 dfs.append(pd.read_excel(file))
         except Exception as e:
