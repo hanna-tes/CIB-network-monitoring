@@ -129,8 +129,7 @@ def standardize_dataframe(df, platform_name=None, source_name=None):
 @st.cache_data(ttl=600)  # Cache for 10 minutes
 def load_default_dataset():
     default_url = (
-        "https://raw.githubusercontent.com/hanna-tes/CIB-network-monitoring/ "
-        "refs/heads/main/Togo_OR_Lome%CC%81_OR_togolais_OR_togolaise_AND_manifest%20-%20Jul%207%2C%202025%20-%205%2012%2053%20PM.csv"
+        "https://raw.githubusercontent.com/hanna-tes/CIB-network-monitoring/refs/heads/main/Togo_OR_Lome%CC%81_OR_togolais_OR_togolaise_AND_manifest%20-%20Jul%207%2C%202025%20-%205%2012%2053%20PM.csv"
     )
     try:
         # This is X (Meltwater) data with UTF-16 encoding and tab separator
