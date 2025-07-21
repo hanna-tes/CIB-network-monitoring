@@ -18,8 +18,8 @@ from modules.clustering_utils import cluster_embeddings
 if 'clip_model' not in st.session_state:
     st.session_state.clip_model, st.session_state.clip_preprocess = load_clip_model()
 
-st.set_page_config(page_title="CIB Coordination Dashboard", layout="wide")
-st.title("🕵️ Coordinated Inauthentic Behavior (CIB) Dashboard")
+st.set_page_config(page_title="CIB Monitoring Dashboard", layout="wide")
+st.title("🕵️ CIB monitoring and analysis Dashboard")
 
 # --- Sidebar: Upload and Settings ---
 st.sidebar.header("📂 Upload Social Media Files")
