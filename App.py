@@ -35,10 +35,10 @@ def clean_text(text):
 
 combined_df = pd.DataFrame()
 
-default_url = "https://raw.githubusercontent.com/yourusername/yourrepo/main/data/default_dataset.csv"
+default_url = "https://raw.githubusercontent.com/hanna-tes/CIB-network-monitoring/refs/heads/main/Togo_OR_Lome%CC%81_OR_togolais_OR_togolaise_AND_manifest%20-%20Jul%207%2C%202025%20-%205%2012%2053%20PM.csv"
 
 try:
-    combined_df = pd.read_csv(default_url, encoding='utf-16', on_bad_lines='skip')
+    combined_df = pd.read_csv(default_url, encoding='utf-16', on_bad_lines='skip',sep='\t',low_memory=False)
 except Exception as e:
     st.warning(f"Failed to load default dataset: {e}")
 
@@ -46,7 +46,7 @@ if uploaded_files:
     dfs = []
     for file in uploaded_files:
         if file.name.endswith('.csv'):
-            dfs.append(pd.read_csv(file, encoding='utf-16', on_bad_lines='skip'))
+            dfs.append(pd.read_csv(file, encoding='utf-16', on_bad_lines='skip',sep='\t',low_memory=False))
         else:
             dfs.append(pd.read_excel(file))
     combined_df = pd.concat(dfs, ignore_index=True)
