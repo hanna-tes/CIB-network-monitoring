@@ -13,7 +13,6 @@ from datetime import timedelta
 from modules.embedding_utils import compute_clip_similarity, load_clip_model, generate_image_embeddings
 from modules.image_tools import extract_image_urls
 from modules.clustering_utils import cluster_embeddings
-from transformers import CLIPProcessor, CLIPModel
 
 # Initialize session state
 if 'clip_model' not in st.session_state:
@@ -38,6 +37,8 @@ def clean_text(text):
     text = re.sub(r"[^a-zA-Z0-9\s]", "", text)
     return text
 
+combined_df = pd.DataFrame()
+
 if uploaded_files:
     dfs = []
     for file in uploaded_files:
@@ -54,6 +55,20 @@ if uploaded_files:
         combined_df['Timestamp'] = pd.to_datetime(combined_df['Timestamp'], errors='coerce')
 
     st.session_state['combined_df'] = combined_df
+
+# --- Load default dataset if no uploads ---
+if not uploaded_files and 'combined_df' not in st.session_state:
+    default_path = "data/default_dataset.csv"
+    if os.path.exists(default_path):
+        st.info("📁 No files uploaded. Using default dataset.")
+        combined_df = pd.read_csv(default_path)
+        if 'text' in combined_df.columns:
+            combined_df['text'] = combined_df['text'].astype(str).apply(clean_text)
+        if 'Timestamp' in combined_df.columns:
+            combined_df['Timestamp'] = pd.to_datetime(combined_df['Timestamp'], errors='coerce')
+        st.session_state['combined_df'] = combined_df
+    else:
+        st.warning("⚠️ No uploaded or default dataset found.")
 
 # --- Tabs ---
 tab1, tab2, tab3 = st.tabs(["📊 Dashboard", "🧠 CLIP Visual Coordination", "📎 About"])
@@ -126,7 +141,11 @@ with tab2:
             st.warning("No image URLs found in posts.")
         else:
             with st.spinner("Downloading and embedding images..."):
-                image_embeddings, valid_images = generate_image_embeddings(image_urls, st.session_state.clip_model, st.session_state.clip_preprocess)
+                image_embeddings, valid_images = generate_image_embeddings(
+                    image_urls,
+                    st.session_state.clip_model,
+                    st.session_state.clip_preprocess
+                )
 
             st.markdown(f"**{len(valid_images)}** images embedded.")
 
