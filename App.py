@@ -10,23 +10,20 @@ import networkx as nx
 import plotly.express as px
 import altair as alt
 from datetime import timedelta
-from modules.embedding_utils import compute_clip_similarity, load_clip_model, generate_image_embeddings
+from modules.embedding_utils import compute_text_similarity
 from modules.image_tools import extract_image_urls
 from modules.clustering_utils import cluster_embeddings
 
 # Initialize session state
-if 'clip_model' not in st.session_state:
-    st.session_state.clip_model, st.session_state.clip_preprocess = load_clip_model()
+st.set_page_config(page_title="CIB Coordination Dashboard", layout="wide")
+st.title("🕵️ Coordinated Inauthentic Behavior (CIB) Dashboard")
 
-st.set_page_config(page_title="CIB Monitoring Dashboard", layout="wide")
-st.title("🕵️ CIB monitoring and analysis Dashboard")
-
-# --- Sidebar Upload ---
+# --- Sidebar: Upload and Settings ---
 st.sidebar.header("📂 Upload Social Media Files")
 uploaded_files = st.sidebar.file_uploader("Upload multiple CSV/Excel files", type=['csv', 'xlsx'], accept_multiple_files=True)
 
 st.sidebar.markdown("---")
-similarity_threshold = st.sidebar.slider("🔍 Similarity Threshold (Visual/Text)", 0.0, 1.0, 0.75, 0.01)
+similarity_threshold = st.sidebar.slider("🔍 Similarity Threshold (Text Only)", 0.0, 1.0, 0.75, 0.01)
 exact_match_toggle = st.sidebar.checkbox("✅ Exact Text Match Only", value=False)
 
 # --- Data Preprocessing ---
@@ -39,36 +36,36 @@ def clean_text(text):
 
 combined_df = pd.DataFrame()
 
+default_url = "https://raw.githubusercontent.com/yourusername/yourrepo/main/data/default_dataset.csv"
+
+try:
+    combined_df = pd.read_csv(default_url, encoding='utf-16', sep='\t',low_memory=False')
+except Exception as e:
+    st.warning(f"Failed to load default dataset: {e}")
+
 if uploaded_files:
     dfs = []
     for file in uploaded_files:
         if file.name.endswith('.csv'):
-            dfs.append(pd.read_csv(file))
+            dfs.append(pd.read_csv(file, encoding='utf-16', sep='\t',low_memory=False'))
         else:
             dfs.append(pd.read_excel(file))
     combined_df = pd.concat(dfs, ignore_index=True)
-else:
-    st.warning("No files uploaded. Loading default dataset...")
-    try:
-        default_url = "https://raw.githubusercontent.com/hanna-tes/CIB-network-monitoring/refs/heads/main/Togo_OR_Lome%CC%81_OR_togolais_OR_togolaise_AND_manifest%20-%20Jul%207%2C%202025%20-%205%2012%2053%20PM.csv"
-        combined_df = pd.read_csv(default_url, encoding='utf-16', sep='\t',low_memory=False)
-        st.success("✅ Default dataset loaded from GitHub.")
-    except Exception as e:
-        st.error(f"⚠️ Failed to load default dataset: {e}")
 
 if not combined_df.empty:
     if 'text' in combined_df.columns:
         combined_df['text'] = combined_df['text'].astype(str).apply(clean_text)
+
     if 'Timestamp' in combined_df.columns:
         combined_df['Timestamp'] = pd.to_datetime(combined_df['Timestamp'], errors='coerce')
+
     st.session_state['combined_df'] = combined_df
 
 # --- Tabs ---
-tab1, tab2, tab3 = st.tabs(["📊 Dashboard", "🧠 CLIP Visual Coordination", "📎 About"])
+tab1, tab2, tab3 = st.tabs(["📊 Dashboard", "🔍 Text Similarity", "📎 About"])
 
 with tab1:
     st.subheader("1. Upload & Explore Data")
-
     combined_df = st.session_state.get('combined_df', pd.DataFrame())
 
     if not combined_df.empty:
@@ -78,9 +75,7 @@ with tab1:
         st.subheader("2. Summary Statistics")
         st.markdown(f"**Total Posts:** {len(combined_df)}")
         if 'Source' in combined_df.columns:
-            st.markdown(f"**Unique Users:** {combined_df['Source'].nunique()}")
-        if 'Timestamp' in combined_df.columns:
-            st.markdown(f"**Time Range:** {combined_df['Timestamp'].min()} → {combined_df['Timestamp'].max()}")
+            st.markdown(f"**Unique Sources:** {combined_df['Source'].nunique()}")
 
         if 'hashtags' in combined_df.columns:
             hashtags_series = combined_df['hashtags'].dropna().astype(str).str.split()
@@ -101,7 +96,7 @@ with tab1:
             st.altair_chart(chart)
 
         if 'Source' in combined_df.columns:
-            st.subheader("4. Most Active Users")
+            st.subheader("4. Most Active Sources")
             top_users = combined_df['Source'].value_counts().head(10)
             st.bar_chart(top_users)
 
@@ -123,30 +118,22 @@ with tab1:
                 st.write("No coordinated reposts detected based on timing.")
 
 with tab2:
-    st.subheader("Visual ↔ Text Similarity Detection (via CLIP)")
+    st.subheader("Text Similarity Detection")
     combined_df = st.session_state.get('combined_df', pd.DataFrame())
 
-    if not combined_df.empty:
-        st.markdown("### 🖼️ Extracting and Embedding Images from Posts")
+    if not combined_df.empty and 'text' in combined_df.columns:
+        with st.spinner("Computing text similarity..."):
+            similar_pairs = compute_text_similarity(combined_df['text'].tolist(), threshold=similarity_threshold, exact=exact_match_toggle)
 
-        image_urls = extract_image_urls(combined_df)
-        if not image_urls:
-            st.warning("No image URLs found in posts.")
+        if similar_pairs:
+            st.markdown(f"**Detected {len(similar_pairs)} Similar Text Pairs:**")
+            for idx1, idx2, score in similar_pairs:
+                st.markdown(f"**Post {idx1}** ↔ **Post {idx2}** (Score: {score:.2f})")
+                st.text_area("Post 1", combined_df.iloc[idx1]['text'], height=80)
+                st.text_area("Post 2", combined_df.iloc[idx2]['text'], height=80)
+                st.markdown("---")
         else:
-            with st.spinner("Downloading and embedding images..."):
-                image_embeddings, valid_images = generate_image_embeddings(image_urls, st.session_state.clip_model, st.session_state.clip_preprocess)
-
-            st.markdown(f"**{len(valid_images)}** images embedded.")
-
-            if len(image_embeddings) >= 2:
-                clusters = cluster_embeddings(image_embeddings, eps=0.3)
-                clustered = pd.DataFrame({'image': valid_images, 'cluster': clusters})
-
-                st.subheader("📸 Detected Visual Clusters")
-                for cluster_id in sorted(clustered['cluster'].unique()):
-                    cluster_imgs = clustered[clustered['cluster'] == cluster_id]['image'].tolist()
-                    st.markdown(f"**Cluster {cluster_id}** ({len(cluster_imgs)} similar images)")
-                    st.image(cluster_imgs, width=150)
+            st.info("No similar text posts found at the selected threshold.")
 
 with tab3:
     st.markdown("""
@@ -157,12 +144,10 @@ with tab3:
     **Key Features:**
     - Upload & preprocess CSV/Excel data
     - Merge multiple datasets
-    - CLIP-based visual coordination detection (image clusters)
+    - Posting timeline and top users
     - Shared URL repost detection
-    - Posting spikes & timeline charts
-    - Top users and hashtags
-    - Text/image coordination similarity search
+    - CLIP removed: now using simple text similarity detection
+    - Coming soon: user interaction networks and exportable reports
 
-
-    🧠 Powered by: OpenAI CLIP · HuggingFace · Streamlit
+    🧠 Powered by: OpenAI · HuggingFace · Streamlit
     """)
