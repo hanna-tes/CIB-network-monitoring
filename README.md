@@ -4,7 +4,7 @@ A Streamlit-based dashboard to analyze social media data and detect patterns of 
 
 ---
 
-## 📌 Features
+## Features
 
 - Upload CSV or Excel files containing social media post data
 - View summary statistics (top users, hashtags, shared URLs)
@@ -18,7 +18,7 @@ A Streamlit-based dashboard to analyze social media data and detect patterns of 
 
 ---
 
-## 📂 Input Data Format
+## Input Data Format
 
 Your dataset should include at least the following columns:
 
@@ -32,7 +32,7 @@ Your dataset should include at least the following columns:
 
 ---
 
-## 🚀 Getting Started
+## Getting Started
 
 ### 1. Clone the repository
 
