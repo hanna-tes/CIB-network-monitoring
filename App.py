@@ -51,7 +51,7 @@ else:
     st.warning("No files uploaded. Loading default dataset...")
     try:
         default_url = "https://raw.githubusercontent.com/hanna-tes/CIB-network-monitoring/refs/heads/main/Togo_OR_Lome%CC%81_OR_togolais_OR_togolaise_AND_manifest%20-%20Jul%207%2C%202025%20-%205%2012%2053%20PM.csv"
-        combined_df = pd.read_csv(default_url)
+        combined_df = pd.read_csv(default_url, encoding='utf-16')
         st.success("✅ Default dataset loaded from GitHub.")
     except Exception as e:
         st.error(f"⚠️ Failed to load default dataset: {e}")
