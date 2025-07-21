@@ -11,8 +11,7 @@ import plotly.express as px
 import altair as alt
 from datetime import timedelta
 from modules.embedding_utils import compute_text_similarity
-from modules.image_tools import extract_image_urls
-from modules.clustering_utils import cluster_embeddings
+from modules.clustering_utils import cluster_texts, build_user_interaction_graph
 
 # Initialize session state
 st.set_page_config(page_title="CIB Monitoring Dashboard", layout="wide")
@@ -36,25 +35,20 @@ def clean_text(text):
 
 combined_df = pd.DataFrame()
 
-# ✅ Replace with your actual raw CSV URL
 default_url = "https://raw.githubusercontent.com/yourusername/yourrepo/main/data/default_dataset.csv"
 
 try:
-    combined_df = pd.read_csv(default_url, encoding='utf-16', sep='\t', on_bad_lines='skip', low_memory=False)
+    combined_df = pd.read_csv(default_url, encoding='utf-16', on_bad_lines='skip')
 except Exception as e:
     st.warning(f"Failed to load default dataset: {e}")
 
-# Merge user-uploaded data if available
 if uploaded_files:
     dfs = []
     for file in uploaded_files:
-        try:
-            if file.name.endswith('.csv'):
-                dfs.append(pd.read_csv(file, encoding='utf-16', on_bad_lines='skip', sep='\t'))
-            else:
-                dfs.append(pd.read_excel(file))
-        except Exception as e:
-            st.error(f"Error loading {file.name}: {e}")
+        if file.name.endswith('.csv'):
+            dfs.append(pd.read_csv(file, encoding='utf-16', on_bad_lines='skip'))
+        else:
+            dfs.append(pd.read_excel(file))
     combined_df = pd.concat(dfs, ignore_index=True)
 
 if not combined_df.empty:
@@ -122,6 +116,18 @@ with tab1:
             else:
                 st.write("No coordinated reposts detected based on timing.")
 
+        if 'text' in combined_df.columns:
+            st.subheader("6. Text Clustering")
+            labels = cluster_texts(combined_df['text'].tolist())
+            combined_df['cluster'] = labels
+            fig = px.histogram(combined_df, x='cluster')
+            st.plotly_chart(fig)
+
+        if 'Source' in combined_df.columns:
+            st.subheader("7. User Interaction Network (based on Source)")
+            G = build_user_interaction_graph(combined_df)
+            st.graphviz_chart(nx.nx_pydot.to_pydot(G).to_string())
+
 with tab2:
     st.subheader("Text Similarity Detection")
     combined_df = st.session_state.get('combined_df', pd.DataFrame())
@@ -146,4 +152,13 @@ with tab3:
 
     This tool supports detection of **Coordinated Inauthentic Behavior (CIB)** across multiple social platforms.
 
+    **Key Features:**
+    - Upload & preprocess CSV/Excel data
+    - Merge multiple datasets
+    - Posting timeline and top users
+    - Shared URL repost detection
+    - Text-based similarity detection
+    - Now includes text clustering & source interaction graph
+
+    🧠 Powered by: OpenAI · HuggingFace · Streamlit
     """)
