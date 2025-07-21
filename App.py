@@ -1,7 +1,3 @@
-# App.py - CIB Monitoring Dashboard (Multi-Platform Support)
-
-# App.py - CIB Monitoring Dashboard (Final Stable Version)
-
 import streamlit as st
 import pandas as pd
 import numpy as np
@@ -11,9 +7,11 @@ import networkx as nx
 from datetime import timedelta
 from pyvis.network import Network
 import streamlit.components.v1 as components
-import altair as alt  # Must be imported!
 
-# Try to load custom modules with fallbacks
+# Import visualization libraries (critical!)
+import altair as alt  # ← This was missing → caused NameError
+
+# Try to load custom modules (safe fallback)
 try:
     from modules.embedding_utils import compute_text_similarity
 except ImportError:
@@ -28,7 +26,7 @@ except ImportError:
 
     def build_user_interaction_graph(df):
         G = nx.Graph()
-        sources = df[df['Source'] != 'Unknown_User']['Source'].dropna().unique()[:50]
+        sources = df[df['Source'] != 'unknown_user']['Source'].dropna().unique()[:50]
         for src in sources:
             G.add_node(src)
         return G
@@ -47,7 +45,7 @@ def extract_hashtags(text):
         return []
     return re.findall(r"#(\w+)", str(text))
 
-# Fix QT @AccountName pattern in Hit Sentence (only for X/Meltwater)
+# Fix QT @AccountName quoting pattern
 def fix_hit_sentence(row):
     opening_text = str(row.get('Opening Text', ''))
     hit_sentence = str(row.get('Hit Sentence', ''))
@@ -63,60 +61,48 @@ def fix_hit_sentence(row):
     return hit_sentence
 
 # -------------------------------
-# Standardize DataFrame Function (Multi-Platform)
+# Standardize DataFrame Function
 # -------------------------------
 def standardize_dataframe(df, platform_name=None, source_name=None):
+    # Normalize column names: strip whitespace and case
+    df.columns = [str(col).strip() for col in df.columns]
+
+    # Define mapping (case-insensitive via .lower() check)
     col_map = {
-        # --- X / Meltwater ---
         'Influencer': 'Source',
-        'Hit Sentence': 'text',           # ← Use Hit Sentence only
+        'Hit Sentence': 'text',           # Use only Hit Sentence
         'Date': 'Timestamp',
-        'url': 'URL',
-
-        # Avoid using Opening Text
-        'Opening Text': '_drop_',          # Explicitly ignore
-
-        # --- TikTok ---
-        'authorMeta/name': 'Source',
-        'webVideoUrl': 'URL',
         'createTimeISO': 'Timestamp',
-        'text': 'text',
-
-        # --- Facebook ---
-        'post_url': 'URL',
-        'created_time': 'Timestamp',
+        'authorMeta/name': 'Source',
         'message': 'text',
-        'from_name': 'Source',
-
-        # --- Telegram ---
-        'channeltitle': 'Source',
-        'date': 'Timestamp',
-        'message': 'text',
-        'url': 'URL',
-
-        # --- Media Articles ---
-        'media_name': 'Source',
-        'publish_date': 'Timestamp',
         'title': 'text',
-        'url': 'URL'
+        'media_name': 'Source',
+        'channeltitle': 'Source'
     }
 
-    # Rename only relevant columns
-    rename_dict = {col: col_map[col] for col in df.columns if col in col_map and col_map[col] != '_drop_'}
-    df_renamed = df.rename(columns=rename_dict)
+    # Add any variation of URL-like columns
+    for col in df.columns:
+        if col.lower() in ['url', 'urls', 'link', 'links', 'weburl', 'web_video_url', 'post_url']:
+            col_map[col] = 'URL'
+
+    # Also support TikTok's webVideoUrl
+    if 'webVideoUrl' in df.columns:
+        col_map['webVideoUrl'] = 'URL'
+
+    # Build rename dictionary for existing columns
+    rename_dict = {col: std for col, std in col_map.items() if col in df.columns}
+    st.write("🔧 Using column mapping:", rename_dict)  # Debug
 
     standardized = {}
-    for col in ['Source', 'URL', 'Timestamp', 'text']:
-        matched_cols = [orig for orig, std in col_map.items() if std == col and orig in df.columns]
-        matched_cols = [c for c in matched_cols if c != 'Opening Text']  # Safety drop
-
-        if matched_cols:
-            combined = df[matched_cols].apply(
+    for std_col in ['Source', 'URL', 'Timestamp', 'text']:
+        sources = [orig for orig, std in col_map.items() if std == std_col and orig in df.columns]
+        if sources:
+            combined = df[sources].apply(
                 lambda row: next((str(val) for val in row if pd.notna(val)), np.nan), axis=1
             )
-            standardized[col] = combined
+            standardized[std_col] = combined
         else:
-            standardized[col] = np.nan
+            standardized[std_col] = np.nan
 
     df_std = pd.DataFrame(standardized)[['Source', 'URL', 'Timestamp', 'text']].copy()
     df_std['Platform'] = platform_name or source_name or 'Unknown'
@@ -124,17 +110,19 @@ def standardize_dataframe(df, platform_name=None, source_name=None):
     return df_std
 
 # -------------------------------
-# Load Default Dataset (GitHub Raw URL) - From X
+# Load Default Dataset (GitHub Raw CSV)
 # -------------------------------
 @st.cache_data(ttl=600)  # Cache for 10 minutes
 def load_default_dataset():
     default_url = (
-        "https://raw.githubusercontent.com/hanna-tes/CIB-network-monitoring/refs/heads/main/Togo_OR_Lome%CC%81_OR_togolais_OR_togolaise_AND_manifest%20-%20Jul%207%2C%202025%20-%205%2012%2053%20PM.csv"
+        "https://raw.githubusercontent.com/hanna-tes/CIB-network-monitoring/ "
+        "refs/heads/main/Togo_OR_Lome%CC%81_OR_togolais_OR_togolaise_AND_manifest%20-%20Jul%207%2C%202025%20-%205%2012%2053%20PM.csv"
     )
     try:
-        # This is X (Meltwater) data with UTF-16 encoding and tab separator
         df = pd.read_csv(default_url, encoding='utf-16', sep='\t', on_bad_lines='skip', low_memory=False)
-        st.info("✅ Successfully loaded **default dataset (X/Meltwater)** from GitHub.")
+        # Clean column names
+        df.columns = [str(col).strip() for col in df.columns]
+        st.info("✅ Successfully loaded **default X dataset** from GitHub.")
         return df
     except Exception as e:
         st.error(f"❌ Failed to load default dataset: {e}")
@@ -150,7 +138,7 @@ st.sidebar.header("📂 Choose Data Source")
 data_option = st.sidebar.radio(
     "Select Input Method",
     options=["📁 Upload Files", "🌐 Use Default Dataset"],
-    help="Upload your own data or explore using the default dataset."
+    help="Upload your own data or use the preloaded example."
 )
 
 combined_df = pd.DataFrame()
@@ -169,22 +157,24 @@ if data_option == "📁 Upload Files":
                 else:
                     df = pd.read_excel(file)
 
+                # Clean column names
+                df.columns = [str(col).strip() for col in df.columns]
+
                 # Detect platform
                 if 'authorMeta/name' in df.columns:
                     platform = 'TikTok'
-                elif 'from_name' in df.columns and 'post_url' in df.columns:
+                elif 'from_name' in df.columns:
                     platform = 'Facebook'
                 elif 'channeltitle' in df.columns:
                     platform = 'Telegram'
                 elif 'media_name' in df.columns:
                     platform = 'Media'
                 else:
-                    platform = 'X'  # Assume X if no clear match
+                    platform = 'X'
 
-                # Apply platform-specific fixes
-                if platform == 'X':
-                    if 'Hit Sentence' in df.columns and 'Opening Text' in df.columns:
-                        df['Hit Sentence'] = df.apply(fix_hit_sentence, axis=1)
+                # Apply X-specific fix
+                if platform == 'X' and 'Hit Sentence' in df.columns and 'Opening Text' in df.columns:
+                    df['Hit Sentence'] = df.apply(fix_hit_sentence, axis=1)
 
                 # Standardize
                 df_std = standardize_dataframe(df, platform_name=platform, source_name=file.name)
@@ -195,25 +185,22 @@ if data_option == "📁 Upload Files":
 
         if all_dfs:
             combined_df = pd.concat(all_dfs, ignore_index=True)
-            st.success(f"✅ Loaded and standardized {len(uploaded_files)} file(s) across platforms.")
+            st.success(f"✅ Loaded and standardized {len(uploaded_files)} file(s).")
 
 elif data_option == "🌐 Use Default Dataset":
-    with st.spinner("📥 Loading default dataset (X)..."):
+    with st.spinner("📥 Loading default dataset..."):
         df = load_default_dataset()
         if df is not None:
-            # Apply QT fix for X data
             if 'Hit Sentence' in df.columns and 'Opening Text' in df.columns:
                 df['Hit Sentence'] = df.apply(fix_hit_sentence, axis=1)
-
-            # Standardize using only Hit Sentence (not Opening Text)
             combined_df = standardize_dataframe(df, platform_name='X', source_name='default_dataset')
-            st.success("✅ Default X dataset loaded and standardized!")
+            st.success("✅ Default dataset loaded and standardized!")
 
 # -------------------------------
 # Post-Processing (All Modes)
 # -------------------------------
 if not combined_df.empty:
-    # Deduplicate full rows
+    # Deduplicate
     combined_df.drop_duplicates(inplace=True)
 
     # Normalize Source
@@ -222,23 +209,25 @@ if not combined_df.empty:
     combined_df.loc[combined_df['Source'].isin(invalid_sources), 'Source'] = 'unknown_user'
     combined_df['Source'] = combined_df['Source'].str.capitalize()
 
-    # Ensure final column order
+    # Ensure correct order
     combined_df = combined_df[['Source', 'URL', 'Timestamp', 'text', 'Platform']].copy()
 
-    # Parse Timestamp safely with ISO format first
+    # Parse Timestamp safely
     combined_df['Timestamp'] = pd.to_datetime(
-        combined_df['Timestamp'], 
-        errors='coerce', 
-        format='ISO8601'  # Efficient and safe for most formats
+        combined_df['Timestamp'],
+        errors='coerce',
+        format='ISO8601'  # Efficient and avoids warning
     )
 
-    # Add cleaned text and hashtags
+    # Add derived features
     combined_df['cleaned_text'] = combined_df['text'].apply(clean_text)
     combined_df['hashtags'] = combined_df['text'].apply(extract_hashtags)
 
-    # Warn if URLs are missing
+    # Warn about URL issues
     if combined_df['URL'].isna().all():
-        st.warning("⚠️ All URLs are missing. Check input data structure.")
+        st.warning("⚠️ All URLs are missing. Please check if your data uses a different link column (e.g., Link, post_url).")
+    else:
+        st.info(f"🔗 Found {combined_df['URL'].notna().sum()} valid URLs.")
 
     # Clustering
     try:
@@ -253,10 +242,14 @@ if not combined_df.empty:
 
     # Similarity
     try:
-        similar_pairs = compute_text_similarity([t for t in combined_df['cleaned_text']], threshold=0.75)
+        similar_pairs = compute_text_similarity(
+            [t for t in combined_df['cleaned_text']],
+            threshold=0.75
+        )
         st.session_state['similar_pairs'] = similar_pairs
-    except:
+    except Exception as e:
         st.session_state['similar_pairs'] = []
+        st.warning(f"⚠️ Similarity computation failed: {e}")
 
     # Cache result
     st.session_state['combined_df'] = combined_df
@@ -304,6 +297,7 @@ with tab1:
     timeline = combined_df.dropna(subset=['Timestamp']).copy()
     timeline['hour'] = timeline['Timestamp'].dt.floor('h')
     post_counts = timeline.groupby('hour').size().reset_index(name='counts')
+
     chart = alt.Chart(post_counts).mark_line(point=True).encode(
         x=alt.X('hour:T', title='Time'),
         y=alt.Y('counts:Q', title='Number of Posts'),
