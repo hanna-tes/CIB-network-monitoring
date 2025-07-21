@@ -13,3 +13,4 @@ Pillow>=9.0.0
 requests
 openpyxl
 networkx
+git+https://github.com/openai/CLIP.git
