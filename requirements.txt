@@ -17,3 +17,6 @@ networkx
 git+https://github.com/openai/CLIP.git
 pyvis
 streamlit-aggrid
+streamlit
+altair
+watchdog
