@@ -124,7 +124,7 @@ with tab1:
             st.plotly_chart(fig)
 
         if 'Source' in combined_df.columns:
-            st.subheader("7. User Interaction Network (based on Source)")
+            st.subheader("6. User Interaction Network (based on Source)")
             G = build_user_interaction_graph(combined_df)
             st.graphviz_chart(nx.nx_pydot.to_pydot(G).to_string())
 
