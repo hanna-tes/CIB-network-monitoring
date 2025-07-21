@@ -13,6 +13,7 @@ from datetime import timedelta
 from modules.embedding_utils import compute_clip_similarity, load_clip_model, generate_image_embeddings
 from modules.image_tools import extract_image_urls
 from modules.clustering_utils import cluster_embeddings
+from transformers import CLIPProcessor, CLIPModel
 
 # Initialize session state
 if 'clip_model' not in st.session_state:
