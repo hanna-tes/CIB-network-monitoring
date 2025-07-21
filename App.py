@@ -163,10 +163,6 @@ with tab3:
     - Top users and hashtags
     - Text/image coordination similarity search
 
-    **Coming Soon:**
-    - User interaction networks
-    - Exportable reports and graphs
-    - Hashtag + content overlap coordination
 
     🧠 Powered by: OpenAI CLIP · HuggingFace · Streamlit
     """)
