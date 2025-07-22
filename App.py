@@ -61,9 +61,6 @@ def preprocess_data(df):
     # 1. Remove duplicates
     df = df.drop_duplicates().reset_index(drop=True)
 
-    # 3. Ensure 'text' is string
-    df['text'] = df['text'].astype(str)
-
     # 4. --- Column Mapping ---
     col_map = {
         # 👤 Influencer / Author
@@ -105,7 +102,10 @@ def preprocess_data(df):
         'source': 'Outlet',
         'Input Name': 'InputSource',
     }
-
+    
+ # 3. Ensure 'text' is string
+    df['text'] = df['text'].astype(str)
+    
     # Apply mapping
     new_columns = []
     for col in df.columns:
