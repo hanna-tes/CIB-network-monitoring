@@ -7,9 +7,12 @@ import seaborn as sns
 import networkx as nx
 import os
 from datetime import timedelta
+from sklearn.feature_extraction.text import TfidfVectorizer
+from sklearn.metrics.pairwise import cosine_similarity
+from itertools import combinations
 
 # Custom modules
-from modules.embedding_utils import compute_text_similarity
+from modules.embedding_utils import compute_visual_clip_similarity
 from modules.clustering_utils import cluster_texts, build_user_interaction_graph
 
 st.set_page_config(page_title="CIB Dashboard", layout="wide")
@@ -59,6 +62,32 @@ def infer_platform_from_url(url):
     else:
         return "Unknown"
 
+# --- Text Similarity Functions ---
+def compute_text_similarity(text1, text2):
+    if not isinstance(text1, str) or not isinstance(text2, str):
+        return 0.0
+    vectorizer = TfidfVectorizer().fit([text1, text2])
+    vectors = vectorizer.transform([text1, text2])
+    return cosine_similarity(vectors[0], vectors[1])[0][0]
+
+def find_textual_similarities(df, threshold=0.85):
+    rows = df[['text', 'Source', 'Timestamp']].dropna()
+    similar_pairs = []
+
+    for (i, row1), (j, row2) in combinations(rows.iterrows(), 2):
+        score = compute_text_similarity(row1['text'], row2['text'])
+        if score >= threshold:
+            similar_pairs.append({
+                'text1': row1['text'],
+                'source1': row1['Source'],
+                'time1': row1['Timestamp'],
+                'text2': row2['text'],
+                'source2': row2['Source'],
+                'time2': row2['Timestamp'],
+                'similarity': round(score, 3)
+            })
+    return pd.DataFrame(similar_pairs)
+
 # --- Load Data ---
 df = None
 if uploaded_file:
@@ -94,7 +123,7 @@ if df is not None and not df.empty:
         df['Platform'] = df['URL'].apply(infer_platform_from_url)
 
 # --- Sidebar: Export ---
-st.sidebar.markdown("### 📤 Export Results")
+st.sidebar.markdown("### 📄 Export Results")
 def convert_df(data):
     return data.to_csv(index=False).encode('utf-8')
 
@@ -115,11 +144,15 @@ with tab1:
     st.markdown("**Top Hashtags (by frequency):**")
     df['hashtags'] = df['text'].str.findall(r"#\\w+")
     all_hashtags = pd.Series([tag for tags in df['hashtags'] for tag in tags])
-    st.bar_chart(all_hashtags.value_counts().head(10))
+    if not all_hashtags.empty:
+        st.bar_chart(all_hashtags.value_counts().head(10))
+    else:
+        st.info("No hashtags found in the dataset.")
 
-    st.markdown("**Posting Spikes Over Time**")
-    time_series = df.groupby(pd.to_datetime(df['Timestamp']).dt.date).size()
-    st.line_chart(time_series)
+    st.markdown("**Posting Activity Over Time**")
+    time_series = df.set_index('Timestamp').resample('D').size()
+    fig = px.area(time_series, title="Daily Post Volume", labels={'value': 'Posts', 'Timestamp': 'Date'})
+    st.plotly_chart(fig, use_container_width=True)
 
 # ==================== TAB 2 ====================
 with tab2:
@@ -127,7 +160,7 @@ with tab2:
 
     st.markdown("This table displays groups of posts that are textually similar, possibly indicating coordinated messaging.")
     try:
-        text_sim_df = find_textual_similarities(df)  # ← USE THIS FUNCTION
+        text_sim_df = find_textual_similarities(df)
         if not text_sim_df.empty:
             st.dataframe(text_sim_df[['text1', 'source1', 'time1', 'text2', 'source2', 'time2', 'similarity']])
         else:
@@ -135,14 +168,13 @@ with tab2:
     except Exception as e:
         st.warning(f"⚠️ Similarity computation failed: {e}")
 
-
     #st.markdown("This table shows image pairs with visual or visual-textual similarities using CLIP.")
     #if 'image_path' in df.columns:
-        #clip_df = compute_visual_clip_similarity(df)
-        #if not clip_df.empty:
-        #    st.dataframe(clip_df[['image1', 'image2', 'clip_score']])
-        #else:
-         #   st.info("No visually similar content detected.")
+     #   clip_df = compute_visual_clip_similarity(df)
+      #  if not clip_df.empty:
+      #      st.dataframe(clip_df[['image1', 'image2', 'clip_score']])
+      #  else:
+       #     st.info("No visually similar content detected.")
 
 # ==================== TAB 3 ====================
 with tab3:
