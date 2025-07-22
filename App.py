@@ -20,58 +20,99 @@ st.sidebar.header("📁 Upload Dataset")
 uploaded_file = st.sidebar.file_uploader("Upload a CSV/TSV file", type=["csv", "tsv"])
 
 # Target columns
-target_columns = ["Source", "Timestamp", "text", "URL", "Platform"]
-
-# Column renaming map
+#Map various column names to standard ones
 col_map = {
     'Influencer': 'Source',
     'authorMeta/name': 'Source',
     'media_name': 'Source',
     'channeltitle': 'Source',
-    'Date': 'Timestamp',
-    'createTimeISO': 'Timestamp',
     'Hit Sentence': 'text',
     'message': 'text',
-    'title': 'text'
+    'title': 'text',
+    'Date': 'Timestamp',
+    'createTimeISO': 'Timestamp',
 }
 
+# Detect platform from URL
+def infer_platform_from_url(url):
+    if pd.isna(url) or not isinstance(url, str) or not url.startswith("http"):
+        return "Unknown"
+    url = url.lower()
+    if "tiktok.com" in url:
+        return "TikTok"
+    elif "facebook.com" in url or "fb.watch" in url:
+        return "Facebook"
+    elif "twitter.com" in url or "x.com" in url:
+        return "Twitter"
+    elif "youtube.com" in url or "youtu.be" in url:
+        return "YouTube"
+    elif "instagram.com" in url:
+        return "Instagram"
+    elif "telegram.me" in url or "t.me" in url:
+        return "Telegram"
+    elif url.startswith("https://"):
+        return "Media"
+    else:
+        return "Unknown"
+
+# Load and clean dataset
 def load_and_standardize_data(df):
-    # Rename columns
-    df.columns = [col_map.get(col, col) for col in df.columns]
+    # Standardize column names
+    df.columns = [col_map.get(col.strip(), col.strip()) for col in df.columns]
     df = df.rename(columns=str.strip)
 
-    # Check if required columns are there after renaming
-    missing = [col for col in target_columns if col not in df.columns]
+    # Required columns
+    essential = ["Source", "Timestamp", "text", "URL"]
+    missing = [col for col in essential if col not in df.columns]
     if missing:
-        st.sidebar.error(f"❌ Missing columns: {missing}")
+        st.sidebar.error(f"❌ Missing required columns: {missing}")
         st.stop()
 
-    # Keep only the required columns
-    df = df[target_columns].copy()
+    # Add Platform column if missing
+    if "Platform" not in df.columns:
+        df["Platform"] = df["URL"].apply(infer_platform_from_url)
 
-    # Clean and parse Timestamp
-    df['Timestamp'] = pd.to_datetime(df['Timestamp'], errors='coerce')
+    # Subset only relevant columns
+    df = df[["Source", "Timestamp", "text", "URL", "Platform"]].copy()
+
+    # Clean timestamp
+    df["Timestamp"] = pd.to_datetime(df["Timestamp"], errors="coerce")
     df.dropna(subset=["Timestamp", "text"], inplace=True)
     return df
 
-# Load data
-if uploaded_file is not None:
+# Load default data from GitHub
+@st.cache_data
+def load_default_dataset():
+    url = "https://raw.githubusercontent.com/hanna-tes/CIB-network-monitoring/refs/heads/main/Togo_OR_Lome%CC%81_OR_togolais_OR_togolaise_AND_manifest%20-%20Jul%207%2C%202025%20-%205%2012%2053%20PM.csv"
+    try:
+        df = pd.read_csv(url, encoding='utf-16', sep='\t', low_memory=False)
+        return df
+    except Exception as e:
+        st.error(f"❌ Failed to load default data: {e}")
+        return pd.DataFrame()
+
+# Sidebar upload or default
+st.sidebar.title("📂 Upload Data")
+uploaded_file = st.sidebar.file_uploader("Upload a CSV file", type=["csv", "tsv"])
+
+if uploaded_file:
+    st.sidebar.success("✅ File uploaded")
     try:
         df = pd.read_csv(uploaded_file, encoding='utf-16', sep='\t', low_memory=False)
-        st.sidebar.success("✅ File uploaded.")
-        df = load_and_standardize_data(df)
     except Exception as e:
         st.sidebar.error(f"❌ Failed to read uploaded file: {e}")
         st.stop()
 else:
-    default_url = "https://raw.githubusercontent.com/hanna-tes/CIB-network-monitoring/main/Togo_OR_Lome%CC%81_OR_togolais_OR_togolaise_AND_manifest%20-%20Jul%207%2C%202025%20-%205%2012%2053%20PM.csv"
-    try:
-        df = pd.read_csv(default_url, encoding='utf-16', sep='\t', low_memory=False)
-        st.sidebar.warning("⚠️ Using default dataset from GitHub.")
-        df = load_and_standardize_data(df)
-    except Exception as e:
-        st.error(f"❌ Failed to load default dataset: {e}")
-        st.stop()
+    st.sidebar.warning("⚠️ Using default dataset from GitHub.")
+    df = load_default_dataset()
+
+# Standardize & clean data
+if not df.empty:
+    df = load_and_standardize_data(df)
+    st.success(f"✅ Loaded {len(df)} posts from {df['Platform'].nunique()} platforms")
+    st.dataframe(df.head(50))
+else:
+    st.error("❌ No data to display.")
 
 # --- Preview ---
 st.subheader("📊 Dataset Preview")
