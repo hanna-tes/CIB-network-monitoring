@@ -56,100 +56,104 @@ def load_default_dataset():
         return pd.DataFrame()
 
 # --- Preprocessing Function ---
-def preprocess_data(df):
-    
-    # 1. Remove duplicates
-    df = df.drop_duplicates().reset_index(drop=True)
+# 1. Remove duplicates
+df = df.drop_duplicates().reset_index(drop=True)
 
-    # 4. --- Column Mapping ---
-    col_map = {
-        # 👤 Influencer / Author
-        'Influencer': 'Influencer',
-        'author': 'Influencer',
-        'username': 'Influencer',
-        'user': 'Influencer',
-        'authorMeta/name': 'Influencer',
-        'creator': 'Influencer',
-        'authorname': 'Influencer',
+# --- COLUMN MAPPING (MUST COME FIRST) ---
+col_map = {
+    # 💬 Text Content
+    'Hit Sentence': 'text',
+    'Headline': 'text',
+    'message': 'text',
+    'title': 'text',
+    'content': 'text',
+    'description': 'text',
+    'opening text': 'text',
+    'Body': 'text',
+    'FullText': 'text',
 
-        # 💬 Text Content
-        'Hit Sentence': 'text',
-        'Headline': 'text',
-        'message': 'text',
-        'title': 'text',
-        'content': 'text',
-        'description': 'text',
-        'opening text': 'text',
+    # 👤 Influencer / Author
+    'Influencer': 'Influencer',
+    'author': 'Influencer',
+    'username': 'Influencer',
+    'user': 'Influencer',
+    'authorMeta/name': 'Influencer',
+    'creator': 'Influencer',
+    'authorname': 'Influencer',
 
-        # 📅 Timestamps
-        'Date': 'Timestamp',
-        'createTimeISO': 'Timestamp',
-        'published_date': 'Timestamp',
-        'pubDate': 'Timestamp',
-        'created_at': 'Timestamp',
-        'Alternate Date Format': 'Timestamp',
+    # 📅 Timestamps
+    'Date': 'Timestamp',
+    'createTimeISO': 'Timestamp',
+    'published_date': 'Timestamp',
+    'pubDate': 'Timestamp',
+    'created_at': 'Timestamp',
+    'Alternate Date Format': 'Timestamp',
 
-        # 🔗 URL Variants
-        'URL': 'URL',
-        'url': 'URL',
-        'webVideoUrl': 'URL',
-        'link': 'URL',
-        'post_url': 'URL',
+    # 🔗 URL Variants
+    'URL': 'URL',
+    'url': 'URL',
+    'webVideoUrl': 'URL',
+    'link': 'URL',
+    'post_url': 'URL',
 
-        # 📺 Media & Channel Metadata
-        'media_name': 'Outlet',
-        'channeltitle': 'Channel',
-        'source': 'Outlet',
-        'Input Name': 'InputSource',
+    # 📺 Media & Channel Metadata
+    'media_name': 'Outlet',
+    'channeltitle': 'Channel',
+    'source': 'Outlet',
+    'Input Name': 'InputSource',
+}
+
+# Apply mapping
+new_columns = []
+for col in df.columns:
+    if col in col_map:
+        new_columns.append(col_map[col])
+        continue
+    normalized_col = col.lower().replace(" ", "").replace("_", "").replace("-", "")
+    matched = None
+    for key, target in col_map.items():
+        norm_key = key.lower().replace(" ", "").replace("_", "").replace("-", "")
+        if normalized_col == norm_key:
+            matched = target
+            break
+    new_columns.append(matched if matched else col)
+df.columns = new_columns
+df = df.loc[:, ~df.columns.duplicated()]
+
+# --- Validate Required Columns (after mapping) ---
+required_cols = ["Influencer", "Timestamp", "text"]
+missing_cols = [col for col in required_cols if col not in df.columns]
+
+if missing_cols:
+    st.error(f"❌ Missing required columns: {missing_cols}")
+    suggestions = {
+        'Influencer': ['source', 'author', 'user', 'username'],
+        'Timestamp': ['date', 'time', 'created', 'published'],
+        'text': ['message', 'content', 'body', 'headline', 'hit sentence']
     }
-    
- # 3. Ensure 'text' is string
-    df['text'] = df['text'].astype(str)
-    
-    # Apply mapping
-    new_columns = []
-    for col in df.columns:
-        if col in col_map:
-            new_columns.append(col_map[col])
-            continue
-        normalized_col = col.lower().replace(" ", "").replace("_", "").replace("-", "")
-        matched = None
-        for key, target in col_map.items():
-            norm_key = key.lower().replace(" ", "").replace("_", "").replace("-", "")
-            if normalized_col == norm_key:
-                matched = target
-                break
-        new_columns.append(matched if matched else col)
-    df.columns = new_columns
-    df = df.loc[:, ~df.columns.duplicated()]
-
-    # 5. --- Required Columns ---
-    required_cols = ["Influencer", "Timestamp", "text"]
-    missing_cols = [col for col in required_cols if col not in df.columns]
-
-    if missing_cols:
-        st.error(f"❌ Missing required columns: {missing_cols}")
-        suggestions = {
-            'Influencer': ['source', 'author', 'user', 'username'],
-            'Timestamp': ['date', 'time', 'created', 'published'],
-            'text': ['message', 'content', 'body', 'headline']
-        }
-        for col in missing_cols:
-            close_matches = [c for c in df.columns if any(sugg in c.lower().replace(" ", "") for sugg in suggestions.get(col, []))]
-            if close_matches:
-                st.info(f"💡 Did you mean to rename `{close_matches[0]}` → `{col}`?")
-            else:
-                if col == "Influencer":
-                    df['Influencer'] = "Unknown_User"
-                elif col == "text":
-                    raise ValueError("No text column found.")
-                elif col == "Timestamp":
-                    df['Timestamp'] = pd.Timestamp.now()
-        # Re-check
-        for col in required_cols:
-            if col not in df.columns:
-                st.error(f"🛑 Still missing: '{col}' → Cannot proceed.")
+    for col in missing_cols:
+        close_matches = [c for c in df.columns if any(sugg in c.lower().replace(" ", "") for sugg in suggestions.get(col, []))]
+        if close_matches:
+            st.info(f"💡 Did you mean to rename `{close_matches[0]}` → `{col}`?")
+        else:
+            if col == "Influencer":
+                df['Influencer'] = "Unknown_User"
+            elif col == "text":
+                st.error("🚫 No text column found. Cannot proceed.")
                 st.stop()
+            elif col == "Timestamp":
+                df['Timestamp'] = pd.Timestamp.now()
+    # Final validation
+    for col in required_cols:
+        if col not in df.columns:
+            st.error(f"🛑 Still missing: '{col}' → Cannot continue.")
+            st.stop()
+
+# --- Clean 'text' column (now that it exists) ---
+df = df[df['text'].notna()]
+df = df[df['text'].str.strip() != ""]
+df['text'] = df['text'].astype(str)
+df = df.reset_index(drop=True)
 
     # 6. --- Timestamp Parsing ---
     date_formats = [
