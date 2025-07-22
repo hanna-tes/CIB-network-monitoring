@@ -11,7 +11,7 @@ import re
 import csv
 from io import StringIO
 
-# Custom modules (with fallbacks)
+# --- Custom Modules (with fallbacks) ---
 try:
     from modules.embedding_utils import compute_text_similarity
 except:
@@ -43,7 +43,7 @@ except:
         return G, pos, cluster_map
 
 
-# Set page config
+# --- Set Page Config ---
 st.set_page_config(page_title="CIB Dashboard", layout="wide")
 st.title("🕵️ CIB Network Monitoring Dashboard")
 
@@ -101,7 +101,6 @@ def find_textual_similarities(df, threshold=0.85):
     vectorizer = TfidfVectorizer(stop_words='english', max_features=10000)
     tfidf_matrix = vectorizer.fit_transform(texts)
     sim_matrix = cosine_similarity(tfidf_matrix)
-
     np.fill_diagonal(sim_matrix, 0)
     sim_matrix = np.triu(sim_matrix, k=1)  # Upper triangle only
 
@@ -153,7 +152,7 @@ def cached_network_graph(_df):
 st.sidebar.header("📁 Upload Dataset")
 uploaded_file = st.sidebar.file_uploader("Upload a CSV or Excel file", type=["csv", "xlsx"])
 
-# Load data
+# --- Load Data ---
 if uploaded_file:
     try:
         raw_bytes = uploaded_file.getvalue()
@@ -186,31 +185,29 @@ if df is None or df.empty:
     st.warning("No data available. Please upload a valid dataset.")
     st.stop()
 
-
 # --- Keep Original Column Names, Especially 'Influencer' ---
-# Ensure required columns exist
+df.columns = [str(col).strip() for col in df.columns]
+
 required_cols = ["Influencer", "Timestamp", "text"]
 missing_cols = [col for col in required_cols if col not in df.columns]
 
 if missing_cols:
     st.error(f"❌ Missing required columns: {missing_cols}")
-    
-    # Define possible matches (normalized)
+
     suggestions = {
-        'Influencer': ['influencer', 'author', 'user', 'username', 'creator', 'authorname', 'authorMeta/name', 'channeltitle'],
-        'Timestamp': ['date', 'time', 'created', 'published', 'timestamp', 'posttime', 'createtimestamp', 'createdat'],
-        'text': ['text', 'message', 'content', 'body', 'caption', 'hit sentence', 'headline', 'opening text', 'fulltext', 'message', 'title']
+        'Influencer': ['source', 'author', 'user', 'username', 'creator', 'authorMeta/name', 'channeltitle'],
+        'Timestamp': ['date', 'time', 'created', 'published', 'createTimeISO'],
+        'text': ['message', 'content', 'body', 'Hit Sentence', 'headline', 'opening text']
     }
 
     for col in missing_cols:
-        # Normalize all column names in df
+        # Normalize column names
         norm_cols = {orig: orig.lower().replace(" ", "").replace("_", "") for orig in df.columns}
-        
         matched_col = None
-        for orig, normalized in norm_cols.items():
-            for sugg in suggestions[col]:
+        for orig, norm in norm_cols.items():
+            for sugg in suggestions.get(col, []):
                 s_norm = sugg.lower().replace(" ", "")
-                if s_norm in normalized or normalized in s_norm:
+                if s_norm in norm or norm in s_norm:
                     matched_col = orig
                     break
             if matched_col:
@@ -224,41 +221,27 @@ if missing_cols:
             if col == "Influencer":
                 df[col] = "Unknown_User"
             elif col == "text":
-                st.error("🚫 Cannot proceed without a text column.")
+                st.error("🚫 No text column found. Cannot proceed.")
                 st.stop()
             elif col == "Timestamp":
                 df[col] = pd.Timestamp.now()
 
-# Final validation
-for col in required_cols:
-    if col not in df.columns:
-        st.error(f"🛑 Still missing after recovery: '{col}'")
-        st.stop()
+    # Final validation
+    for col in required_cols:
+        if col not in df.columns:
+            st.error(f"🛑 Still missing: '{col}'")
+            st.stop()
 
-# Clean text and timestamp safely
+# Clean text and convert timestamp
 df = df.dropna(subset=['text']).reset_index(drop=True)
-
-# Step 1: Parse timestamps
 df['Timestamp'] = pd.to_datetime(df['Timestamp'], errors='coerce')
-
-# Step 2: Drop rows with failed parsing
 df = df.dropna(subset=['Timestamp']).reset_index(drop=True)
 
-# Step 3: Localize all timestamps to UTC
-df['Timestamp'] = df['Timestamp'].apply(
-    lambda x: x.tz_convert('UTC') if x.tzinfo else x.tz_localize('UTC')
-)
-
-# Ensure at least one valid timestamp exists
-if df['Timestamp'].empty:
-    st.error("🚫 No valid timestamps found after cleaning.")
+if df.empty:
+    st.error("❌ No valid data remains after cleaning.")
     st.stop()
 
-# Now extract min/max safely
-min_date = df['Timestamp'].min().date()
-max_date = df['Timestamp'].max().date()
-
-# --- Create 'Platform' Column from URL ---
+# Create Platform from URL
 if 'URL' in df.columns:
     df['Platform'] = df['URL'].apply(infer_platform_from_url)
 else:
@@ -273,7 +256,12 @@ df['original_text'] = df['text'].apply(extract_original_text)
 st.sidebar.header("🔍 Filters")
 min_date = df['Timestamp'].min().date()
 max_date = df['Timestamp'].max().date()
-date_range = st.sidebar.date_input("Date Range", [min_date, max_date])
+date_range = st.sidebar.date_input(
+    "Date Range",
+    value=[min_date, max_date],
+    min_value=min_date,
+    max_value=max_date
+)
 
 available_platforms = df['Platform'].dropna().astype(str).unique().tolist()
 platforms = st.sidebar.multiselect(
