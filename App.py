@@ -8,45 +8,12 @@ from datetime import timedelta
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics.pairwise import cosine_similarity
 import re
-import csv
 from io import StringIO
-
-# --- Custom Modules (with fallbacks) ---
-try:
-    from modules.embedding_utils import compute_text_similarity
-except:
-    def compute_text_similarity(text1, text2):
-        if not isinstance(text1, str) or not isinstance(text2, str):
-            return 0.0
-        vectorizer = TfidfVectorizer().fit([text1, text2])
-        vectors = vectorizer.transform([text1, text2])
-        return cosine_similarity(vectors)[0][1]
-
-try:
-    from modules.clustering_utils import cluster_texts, build_user_interaction_graph
-except:
-    def cluster_texts(df):
-        df = df.copy()
-        df['cluster'] = 0
-        return df
-
-    def build_user_interaction_graph(df):
-        G = nx.Graph()
-        nodes = df['Influencer'].dropna().unique()[:10]
-        for u in nodes:
-            G.add_node(u)
-            for v in nodes:
-                if u != v:
-                    G.add_edge(u, v, weight=1)
-        pos = nx.spring_layout(G, seed=42)
-        cluster_map = {n: 0 for n in G.nodes}
-        return G, pos, cluster_map
-
+import csv
 
 # --- Set Page Config ---
 st.set_page_config(page_title="CIB Dashboard", layout="wide")
 st.title("🕵️ CIB Network Monitoring Dashboard")
-
 
 # --- Helper Functions ---
 def infer_platform_from_url(url):
@@ -70,7 +37,6 @@ def infer_platform_from_url(url):
     else:
         return "Unknown"
 
-
 def extract_original_text(text):
     """Remove RT @user: prefix to get the core message"""
     if pd.isna(text) or not isinstance(text, str):
@@ -78,42 +44,137 @@ def extract_original_text(text):
     cleaned = re.sub(r'^RT\s+@\w+:\s*', '', text).strip()
     return cleaned
 
-
 @st.cache_data(show_spinner=False)
 def load_default_dataset():
     url = "https://raw.githubusercontent.com/hanna-tes/CIB-network-monitoring/refs/heads/main/TogoJULYData%20-%20Sheet1.csv"
     try:
-        return pd.read_csv(url)
+        df = pd.read_csv(url)
+        #st.sidebar.success("✅ Data loaded from default URL")
+        return df
     except Exception as e:
         st.error(f"Failed to load default dataset: {e}")
         return pd.DataFrame()
 
+# --- Preprocessing Function ---
+def preprocess_data(df):
+    """
+    Preprocesses DataFrame from URL.
+    Uses 'df' consistently, handles column mapping, timestamps, and text cleaning.
+    """
+    # 1. Remove duplicates
+    df = df.drop_duplicates().reset_index(drop=True)
 
-# --- Advanced Preprocessing Function ---
-def preprocess_data(data):
-    # Remove duplicates
-    data = data.drop_duplicates().reset_index(drop=True)
+    # 2. Drop rows where 'text' is null or empty
+    if 'text' not in df.columns:
+        raise ValueError("Column 'text' not found in data.")
+    df = df[df['text'].notna()]
+    df = df[df['text'].str.strip() != ""]
+    df = df.reset_index(drop=True)
 
-    # Drop rows where 'text' is null
-    data = data[data['text'].notna()].copy()
+    # 3. Ensure 'text' is string
+    df['text'] = df['text'].astype(str)
 
-    # Ensure 'text' is string
-    data['text'] = data['text'].astype(str)
+    # 4. --- Column Mapping ---
+    col_map = {
+        # 👤 Influencer / Author
+        'Influencer': 'Influencer',
+        'author': 'Influencer',
+        'username': 'Influencer',
+        'user': 'Influencer',
+        'authorMeta/name': 'Influencer',
+        'creator': 'Influencer',
+        'authorname': 'Influencer',
 
-    # List of common timestamp formats
+        # 💬 Text Content
+        'Hit Sentence': 'text',
+        'Headline': 'text',
+        'message': 'text',
+        'title': 'text',
+        'content': 'text',
+        'description': 'text',
+        'opening text': 'text',
+
+        # 📅 Timestamps
+        'Date': 'Timestamp',
+        'createTimeISO': 'Timestamp',
+        'published_date': 'Timestamp',
+        'pubDate': 'Timestamp',
+        'created_at': 'Timestamp',
+        'Alternate Date Format': 'Timestamp',
+
+        # 🔗 URL Variants
+        'URL': 'URL',
+        'url': 'URL',
+        'webVideoUrl': 'URL',
+        'link': 'URL',
+        'post_url': 'URL',
+
+        # 📺 Media & Channel Metadata
+        'media_name': 'Outlet',
+        'channeltitle': 'Channel',
+        'source': 'Outlet',
+        'Input Name': 'InputSource',
+    }
+
+    # Apply mapping
+    new_columns = []
+    for col in df.columns:
+        if col in col_map:
+            new_columns.append(col_map[col])
+            continue
+        normalized_col = col.lower().replace(" ", "").replace("_", "").replace("-", "")
+        matched = None
+        for key, target in col_map.items():
+            norm_key = key.lower().replace(" ", "").replace("_", "").replace("-", "")
+            if normalized_col == norm_key:
+                matched = target
+                break
+        new_columns.append(matched if matched else col)
+    df.columns = new_columns
+    df = df.loc[:, ~df.columns.duplicated()]
+
+    # 5. --- Required Columns ---
+    required_cols = ["Influencer", "Timestamp", "text"]
+    missing_cols = [col for col in required_cols if col not in df.columns]
+
+    if missing_cols:
+        st.error(f"❌ Missing required columns: {missing_cols}")
+        suggestions = {
+            'Influencer': ['source', 'author', 'user', 'username'],
+            'Timestamp': ['date', 'time', 'created', 'published'],
+            'text': ['message', 'content', 'body', 'headline']
+        }
+        for col in missing_cols:
+            close_matches = [c for c in df.columns if any(sugg in c.lower().replace(" ", "") for sugg in suggestions.get(col, []))]
+            if close_matches:
+                st.info(f"💡 Did you mean to rename `{close_matches[0]}` → `{col}`?")
+            else:
+                if col == "Influencer":
+                    df['Influencer'] = "Unknown_User"
+                elif col == "text":
+                    raise ValueError("No text column found.")
+                elif col == "Timestamp":
+                    df['Timestamp'] = pd.Timestamp.now()
+        # Re-check
+        for col in required_cols:
+            if col not in df.columns:
+                st.error(f"🛑 Still missing: '{col}' → Cannot proceed.")
+                st.stop()
+
+    # 6. --- Timestamp Parsing ---
     date_formats = [
-        '%b %d, %Y @ %H:%M:%S.%f',  # Jan 10, 2025 @ 23:18:18.000
-        '%d-%b-%Y %I:%M%p',         # 10-Jan-2025 11:18AM
-        '%Y-%m-%d %H:%M:%S',        # 2025-01-10 23:18:18
-        '%d/%m/%Y %H:%M:%S',        # 10/01/2025 23:18:18
-        '%m/%d/%Y %H:%M:%S',        # 01/10/2025 23:18:18
-        '%Y-%m-%dT%H:%M:%SZ',       # 2025-01-10T23:18:18Z
-        '%Y-%m-%d %H:%M:%S.%f',     # 2025-01-10 23:18:18.000
-        '%d %b %Y %H:%M:%S',        # 10 Jan 2025 23:18:18
-        '%A, %d %b %Y %H:%M:%S',    # Saturday, 10 Jan 2025 23:18:18
-        '%b %d, %Y %I:%M%p',         # Jan 10, 2025 11:18AM
-        '%d %b %Y %I:%M%p',          # 10 Jan 2025 11:18AM
-        '%Y-%m-%d %H:%M:%S%z',       # 2025-01-10 23:18:18+0000
+        '%b %d, %Y @ %H:%M:%S.%f',
+        '%d-%b-%Y %I:%M%p',
+        '%Y-%m-%d %H:%M:%S',
+        '%d/%m/%Y %H:%M:%S',
+        '%m/%d/%Y %H:%M:%S',
+        '%Y-%m-%dT%H:%M:%SZ',
+        '%Y-%m-%d %H:%M:%S.%f',
+        '%d %b %Y %H:%M:%S',
+        '%A, %d %b %Y %H:%M:%S',
+        '%b %d, %Y %I:%M%p',
+        '%d %b %Y %I:%M%p',
+        '%Y-%m-%d %H:%M:%S%z',
     ]
 
     def parse_timestamp(timestamp):
@@ -126,13 +187,11 @@ def preprocess_data(data):
                     return parsed
             except (ValueError, TypeError):
                 continue
-        # Fallback: infer format
         return pd.to_datetime(timestamp, infer_datetime_format=True, errors='coerce')
 
-    # Apply parsing
-    data['Timestamp'] = data['Timestamp'].apply(parse_timestamp)
+    df['Timestamp'] = df['Timestamp'].apply(parse_timestamp)
 
-    # Convert to UTC (timezone-aware)
+    # Convert to UTC
     def localize_to_utc(dt):
         if pd.isna(dt):
             return dt
@@ -141,42 +200,64 @@ def preprocess_data(data):
         else:
             return dt.tz_convert('UTC')
 
-    data['Timestamp'] = data['Timestamp'].apply(localize_to_utc)
+    df['Timestamp'] = df['Timestamp'].apply(localize_to_utc)
 
-    # Clean text
+    # 7. --- Clean Text ---
     def clean_text(text):
-        text = re.sub(r'^QT.*?;.*', lambda m: m.group(0).split(';')[0], text)  # Remove after ; if starts with QT
+        if not isinstance(text, str):
+            return ""
+        text = re.sub(r'^QT.*?;.*', lambda m: m.group(0).split(';')[0], text)
         text = text.lower()
-        text = re.sub(r'http\S+|www\S+|https\S+', '', text)  # Remove URLs
-        text = re.sub(r"\\n|\\r|\\t", " ", text)  # Remove escaped chars
-        text = re.sub(r"rt @\S+", "", text)  # Remove retweets
-        text = re.sub(r"qt @\S+", "", text)  # Remove quote-tweets
-        text = re.sub(r'\s+', ' ', text).strip()  # Normalize whitespace
+        text = re.sub(r'http\S+|www\S+|https\S+', '', text)
+        text = re.sub(r"\\n|\\r|\\t", " ", text)
+        text = re.sub(r"rt @\S+", "", text)
+        text = re.sub(r"qt @\S+", "", text)
+        text = re.sub(r'\s+', ' ', text).strip()
         return text
 
-    data['text'] = data['text'].apply(clean_text)
-    return data
+    df['text'] = df['text'].apply(clean_text)
 
+    # 8. --- Create 'Platform' from URL ---
+    url_cols = ['URL', 'url', 'webVideoUrl', 'link', 'post_url']
+    url_found = False
+    for col in url_cols:
+        if col in df.columns:
+            df['URL'] = df[col]
+            url_found = True
+            break
+
+    if url_found and 'URL' in df.columns:
+        df['Platform'] = df['URL'].apply(infer_platform_from_url)
+    else:
+        df['Platform'] = "Unknown"
+        st.sidebar.warning("⚠️ No URL column found → all platforms marked as 'Unknown'")
+
+    # 9. --- Extract original text (remove RT) ---
+    df['original_text'] = df['text'].apply(extract_original_text)
+
+    # 10. --- Final cleanup ---
+    df = df.dropna(subset=['Timestamp']).reset_index(drop=True)
+    if df.empty:
+        st.error("❌ No valid data after preprocessing.")
+        st.stop()
+
+    return df
 
 # Vectorized similarity function
 def find_textual_similarities(df, threshold=0.85):
     clean_df = df[['original_text', 'Influencer', 'Timestamp']].dropna()
     clean_df = clean_df[clean_df['original_text'].str.strip() != ""]
     texts = clean_df['original_text'].tolist()
-
     if len(texts) < 2:
         return pd.DataFrame()
-
     vectorizer = TfidfVectorizer(stop_words='english', max_features=10000)
     tfidf_matrix = vectorizer.fit_transform(texts)
     sim_matrix = cosine_similarity(tfidf_matrix)
     np.fill_diagonal(sim_matrix, 0)
     sim_matrix = np.triu(sim_matrix, k=1)
-
     idx_i, idx_j = np.where(sim_matrix >= threshold)
     seen = set()
     similar_pairs = []
-
     for i, j in zip(idx_i, idx_j):
         key = tuple(sorted([i, j]))
         if key in seen:
@@ -194,196 +275,53 @@ def find_textual_similarities(df, threshold=0.85):
             'similarity': round(sim_matrix[i, j], 3),
             'shared_narrative': row1['original_text'][:150] + ("..." if len(row1['original_text']) > 150 else "")
         })
-
     return pd.DataFrame(similar_pairs)
-
 
 # --- Cached Expensive Functions ---
 @st.cache_data(show_spinner="🔍 Computing textual similarities...")
 def cached_similarity_analysis(_df, threshold=0.85):
     return find_textual_similarities(_df, threshold)
 
-
 @st.cache_data(show_spinner="🧩 Clustering texts...")
 def cached_clustering(_df):
-    return cluster_texts(_df)
-
+    try:
+        from modules.clustering_utils import cluster_texts
+        return cluster_texts(_df)
+    except:
+        _df = _df.copy()
+        _df['cluster'] = 0
+        return _df
 
 @st.cache_data(show_spinner="🕸️ Building network graph...")
 def cached_network_graph(_df):
-    G, pos, cluster_map = build_user_interaction_graph(_df)
-    return G, pos, cluster_map
-
-
-# --- Sidebar: Upload Dataset ---
-st.sidebar.header("📁 Upload Dataset")
-uploaded_file = st.sidebar.file_uploader("Upload a CSV or Excel file", type=["csv", "xlsx"])
-
-# --- Load Data ---
-if uploaded_file:
     try:
-        raw_bytes = uploaded_file.getvalue()
-        encodings = ['utf-16', 'utf-8', 'latin1']
-        decoded = None
-        for enc in encodings:
-            try:
-                decoded = raw_bytes.decode(enc)
-                st.sidebar.info(f"✅ Decoded using: {enc}")
-                break
-            except UnicodeDecodeError:
-                continue
-        if decoded is None:
-            st.error("Could not decode file.")
-            st.stop()
+        from modules.clustering_utils import build_user_interaction_graph
+        return build_user_interaction_graph(_df)
+    except:
+        G = nx.Graph()
+        nodes = _df['Influencer'].dropna().unique()[:10]
+        for u in nodes:
+            G.add_node(u)
+            for v in nodes:
+                if u != v:
+                    G.add_edge(u, v, weight=1)
+        pos = nx.spring_layout(G, seed=42)
+        cluster_map = {n: 0 for n in G.nodes}
+        return G, pos, cluster_map
 
-        sample_line = decoded.strip().splitlines()[0]
-        sep = '\t' if '\t' in sample_line else ','
+# --- Load Data from URL ---
+st.sidebar.header("📥 Data Source")
+st.sidebar.info("Loading data from default URL")
 
-        df = pd.read_csv(StringIO(decoded), sep=sep, low_memory=False)
-    except Exception as e:
-        st.sidebar.error(f"Failed to parse file: {e}")
-        st.stop()
-else:
-    st.sidebar.info("Using default demo dataset")
-    df = load_default_dataset()
+df = load_default_dataset()
 
 # Exit if no data
 if df is None or df.empty:
-    st.warning("No data available. Please upload a valid dataset.")
+    st.warning("No data available.")
     st.stop()
 
-# --- Standardize Column Names ---
-df.columns = [str(col).strip() for col in df.columns]
-
-# --- Enhanced Column Mapping ---
-col_map = {
-    # 👤 Influencer / Author Fields
-    'Influencer': 'Influencer',
-    'author': 'Influencer',
-    'username': 'Influencer',
-    'user': 'Influencer',
-    'authorMeta/name': 'Influencer',
-    'creator': 'Influencer',
-    'authorname': 'Influencer',
-
-    # 💬 Text Content
-    'Hit Sentence': 'text',
-    'Headline': 'text',
-    'message': 'text',
-    'title': 'text',
-    'content': 'text',
-    'description': 'text',
-    'opening text': 'text',
-
-    # 📅 Timestamps
-    'Date': 'Timestamp',
-    'createTimeISO': 'Timestamp',
-    'published_date': 'Timestamp',
-    'pubDate': 'Timestamp',
-    'created_at': 'Timestamp',
-    'Alternate Date Format': 'Timestamp',
-
-    # 🔗 URL Variants
-    'URL': 'URL',
-    'url': 'URL',
-    'webVideoUrl': 'URL',
-    'link': 'URL',
-    'post_url': 'URL',
-
-    # 📺 Media & Channel Metadata
-    'media_name': 'Outlet',
-    'channeltitle': 'Channel',
-    'source': 'Outlet',
-    'Input Name': 'InputSource',
-}
-
-# Apply mapping
-new_columns = []
-for col in df.columns:
-    if col in col_map:
-        new_columns.append(col_map[col])
-        continue
-    normalized_col = col.lower().replace(" ", "").replace("_", "").replace("-", "")
-    matched = None
-    for key, target in col_map.items():
-        norm_key = key.lower().replace(" ", "").replace("_", "").replace("-", "")
-        if normalized_col == norm_key:
-            matched = target
-            break
-    new_columns.append(matched if matched else col)
-df.columns = new_columns
-df = df.loc[:, ~df.columns.duplicated()]
-
-# --- Ensure Required Columns Exist ---
-required_cols = ["Influencer", "Timestamp", "text"]
-missing_cols = [col for col in required_cols if col not in df.columns]
-
-if missing_cols:
-    st.error(f"❌ Missing required columns: {missing_cols}")
-
-    suggestions = {
-        'Influencer': ['source', 'author', 'user', 'username', 'creator', 'authorMeta/name', 'channeltitle'],
-        'Timestamp': ['date', 'time', 'created', 'published', 'createTimeISO'],
-        'text': ['message', 'content', 'body', 'Hit Sentence', 'headline', 'opening text']
-    }
-
-    for col in missing_cols:
-        norm_cols = {orig: orig.lower().replace(" ", "").replace("_", "") for orig in df.columns}
-        matched_col = None
-        for orig, norm in norm_cols.items():
-            for sugg in suggestions.get(col, []):
-                s_norm = sugg.lower().replace(" ", "")
-                if s_norm in norm or norm in s_norm:
-                    matched_col = orig
-                    break
-            if matched_col:
-                break
-
-        if matched_col:
-            st.success(f"✅ '{matched_col}' → '{col}' (mapped automatically)")
-            df[col] = df[matched_col]
-        else:
-            st.warning(f"⚠️ No match found for '{col}'")
-            if col == "Influencer":
-                df[col] = "Unknown_User"
-            elif col == "text":
-                st.error("🚫 No text column found. Cannot proceed.")
-                st.stop()
-            elif col == "Timestamp":
-                df[col] = pd.Timestamp.now()
-
-    for col in required_cols:
-        if col not in df.columns:
-            st.error(f"🛑 Still missing: '{col}'")
-            st.stop()
-
-# --- Apply Preprocessing Pipeline ---
+# --- Preprocess ---
 df = preprocess_data(df)
-
-# Drop any remaining invalid timestamps
-df = df.dropna(subset=['Timestamp']).reset_index(drop=True)
-if df.empty:
-    st.error("❌ No valid data remains after preprocessing.")
-    st.stop()
-
-# --- Create 'Platform' from URL ---
-url_cols = ['URL', 'url', 'webVideoUrl', 'link', 'post_url']
-url_found = False
-for col in url_cols:
-    if col in df.columns:
-        df['URL'] = df[col]  # Use first found
-        url_found = True
-        break
-
-if url_found and 'URL' in df.columns:
-    df['Platform'] = df['URL'].apply(infer_platform_from_url)
-else:
-    df['Platform'] = "Unknown"
-    st.sidebar.warning("⚠️ No URL column found → all platforms marked as 'Unknown'")
-
-# Preprocess: Extract original text (remove RT)
-df['original_text'] = df['text'].apply(extract_original_text)
-
 
 # --- Sidebar Filters ---
 st.sidebar.header("🔍 Filters")
@@ -425,10 +363,8 @@ def convert_df(data):
 csv_data = convert_df(filtered_df)
 st.sidebar.download_button("Download Filtered Data", csv_data, "filtered_data.csv", "text/csv")
 
-
 # --- Tabs ---
 tab1, tab2, tab3 = st.tabs(["📊 Overview", "🔍 Analysis", "🌐 Network & Risk"])
-
 
 # ==================== TAB 1: Overview ====================
 with tab1:
@@ -460,7 +396,6 @@ with tab1:
     time_series = filtered_df.set_index('Timestamp').resample('D').size()
     fig_ts = px.area(time_series, title="Daily Post Volume", labels={'value': 'Number of Posts', 'Timestamp': 'Date'})
     st.plotly_chart(fig_ts, use_container_width=True)
-
 
 # ==================== TAB 2: Similarity & Coordination ====================
 with tab2:
@@ -499,7 +434,6 @@ with tab2:
     else:
         st.info("No significant similarities found above threshold.")
 
-
 # ==================== TAB 3: Network & Risk ====================
 with tab3:
     st.subheader("🚨 High-Risk Accounts & Networks")
@@ -508,7 +442,6 @@ with tab3:
         clustered_df = cached_clustering(filtered_df)
         if 'cluster' not in clustered_df.columns:
             raise ValueError("Clustering did not return 'cluster' column")
-
         cluster_counts = clustered_df['cluster'].value_counts()
         st.markdown("### 🤖 Detected Coordination Clusters")
         fig_clust = px.bar(
@@ -519,7 +452,6 @@ with tab3:
             color_discrete_sequence=px.colors.qualitative.Set3
         )
         st.plotly_chart(fig_clust, use_container_width=True)
-
         st.dataframe(clustered_df[['Influencer', 'text', 'Timestamp', 'cluster']])
     except Exception as e:
         st.warning(f"⚠️ Clustering failed: {e}")
@@ -532,7 +464,6 @@ with tab3:
             x0, y0 = pos[edge[0]]
             x1, y1 = pos[edge[1]]
             edge_trace.append(go.Scatter(x=[x0, x1], y=[y0, y1], mode='lines', line=dict(width=0.8, color='#888'), hoverinfo='none'))
-
         node_trace = go.Scatter(
             x=[pos[node][0] for node in G.nodes()],
             y=[pos[node][1] for node in G.nodes()],
@@ -548,7 +479,6 @@ with tab3:
             ),
             hoverinfo='text'
         )
-
         fig_net = go.Figure(data=edge_trace + [node_trace],
                             layout=go.Layout(
                                 title="User Network (Click & Drag to Explore)",
@@ -571,7 +501,6 @@ with tab3:
             ])['Influencer']
             influencer_counts = all_influencers.value_counts()
             high_risk = influencer_counts[influencer_counts >= 3]
-
             if len(high_risk) > 0:
                 fig_hr = px.bar(
                     high_risk,
