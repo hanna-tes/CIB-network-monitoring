@@ -57,19 +57,9 @@ def load_default_dataset():
 
 # --- Preprocessing Function ---
 def preprocess_data(df):
-    """
-    Preprocesses DataFrame from URL.
-    Uses 'df' consistently, handles column mapping, timestamps, and text cleaning.
-    """
+    
     # 1. Remove duplicates
     df = df.drop_duplicates().reset_index(drop=True)
-
-    # 2. Drop rows where 'text' is null or empty
-    if 'text' not in df.columns:
-        raise ValueError("Column 'text' not found in data.")
-    df = df[df['text'].notna()]
-    df = df[df['text'].str.strip() != ""]
-    df = df.reset_index(drop=True)
 
     # 3. Ensure 'text' is string
     df['text'] = df['text'].astype(str)
