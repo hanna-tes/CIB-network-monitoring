@@ -9,7 +9,7 @@ import os
 from datetime import timedelta
 
 # Custom modules
-from modules.embedding_utils import compute_text_similarity, compute_visual_clip_similarity
+from modules.embedding_utils import compute_text_similarity
 from modules.clustering_utils import cluster_texts, build_user_interaction_graph
 
 st.set_page_config(page_title="CIB Dashboard", layout="wide")
@@ -135,13 +135,13 @@ with tab2:
     except Exception as e:
         st.warning(f"⚠️ Similarity computation failed: {e}")
 
-    st.markdown("This table shows image pairs with visual or visual-textual similarities using CLIP.")
-    if 'image_path' in df.columns:
-        clip_df = compute_visual_clip_similarity(df)
-        if not clip_df.empty:
-            st.dataframe(clip_df[['image1', 'image2', 'clip_score']])
-        else:
-            st.info("No visually similar content detected.")
+    #st.markdown("This table shows image pairs with visual or visual-textual similarities using CLIP.")
+    #if 'image_path' in df.columns:
+        #clip_df = compute_visual_clip_similarity(df)
+        #if not clip_df.empty:
+        #    st.dataframe(clip_df[['image1', 'image2', 'clip_score']])
+        #else:
+         #   st.info("No visually similar content detected.")
 
 # ==================== TAB 3 ====================
 with tab3:
