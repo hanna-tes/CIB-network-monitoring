@@ -262,35 +262,32 @@ df = df.dropna(subset=['text']).reset_index(drop=True)
 df['Timestamp'] = pd.to_datetime(df['Timestamp'], errors='coerce')
 df = df.dropna(subset=['Timestamp']).reset_index(drop=True)
 
-# --- Ensure Source is NOT overwritten by platform ---
-# First, preserve any existing 'Source' before we touch Platform
-if 'Source' in df.columns:
-    st.sidebar.info("🔹 Using mapped 'Source' column for user accounts.")
-else:
-    # Try hard to find influencer field
-    influencer_candidates = ['Influencer', 'author', 'username', 'user', 'creator', 'authorMeta/name', 'channeltitle']
-    found = False
-    for col in influencer_candidates:
-        if col in df.columns:
-            df['Source'] = df[col].astype(str).fillna("Unknown")
-            st.sidebar.success(f"✅ Assigned '{col}' → 'Source'")
-            found = True
-            break
-    if not found:
-        st.warning("⚠️ No valid influencer column found. Using placeholder.")
-        df['Source'] = "Unknown"
+# --- Final Validation: Ensure 'Source' is meaningful and not corrupted ---
+# If after mapping, 'Source' contains only platform-like values, fix it
+common_platforms = ['twitter', 'facebook', 'youtube', 'tiktok', 'instagram', 'telegram', 'media', 'unknown']
+source_sample = df['Source'].astype(str).str.lower().unique()
 
-# Now safely assign Platform — independent of Source
-if 'Platform' not in df.columns:
-    if 'URL' in df.columns:
-        df['Platform'] = df['URL'].apply(infer_platform_from_url)
-        st.sidebar.info("🌐 'Platform' created from URL parsing.")
-    else:
-        df['Platform'] = "Unknown"
-        st.sidebar.warning("⚠️ No URL column → all platforms marked as 'Unknown'")
+# Check if Source looks corrupted (contains platforms)
+if any(p in source_sample for p in common_platforms):
+    st.error("❌ Warning: 'Source' column appears to contain PLATFORM or generic names instead of influencers.")
+    
+    # Try to recover using actual influencer column
+    recovery_cols = ['Influencer', 'author', 'username', 'user', 'authorMeta/name', 'channeltitle']
+    recovered = False
+    for col in recovery_cols:
+        if col in df.columns and col != 'Source':
+            real_values = df[col].dropna().astype(str).str.lower()
+            if len(real_values) > 0 and not all(p in real_values.values for p in common_platforms):
+                st.success(f"🔁 Recovering 'Source' from '{col}'")
+                df['Source'] = df[col].fillna("Unknown_User")
+                recovered = True
+                break
+    
+    if not recovered:
+        st.warning("⚠️ Could not recover real influencer data. Keeping current 'Source'.")
 else:
-    st.sidebar.info("🔹 Using existing 'Platform' column.")
-
+    st.sidebar.success("✅ 'Source' verified: contains user/influencer names.")
+    
 # Extract original text
 df['original_text'] = df['text'].apply(extract_original_text)
 
