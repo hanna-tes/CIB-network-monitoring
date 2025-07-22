@@ -16,7 +16,7 @@ networkx
 git+https://github.com/openai/CLIP.git
 pyvis
 streamlit-aggrid
-streamlit
+seaborn
 altair
 watchdog
 plotly==5.21.0
