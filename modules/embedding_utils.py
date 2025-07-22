@@ -1,36 +1,51 @@
+import torch
 import numpy as np
 from PIL import Image
 from sklearn.metrics.pairwise import cosine_similarity
 from sentence_transformers import SentenceTransformer
 from transformers import CLIPProcessor, CLIPModel
-import torch
 import streamlit as st
 
-# Load models only once
-@st.cache_resource
-def load_text_model():
-    return SentenceTransformer("all-MiniLM-L6-v2")
-
+# Load models once and cache
 @st.cache_resource
 def load_clip_model():
     model = CLIPModel.from_pretrained("openai/clip-vit-base-patch32")
     processor = CLIPProcessor.from_pretrained("openai/clip-vit-base-patch32")
     return model, processor
 
-def compute_text_similarity(texts):
-    model = load_text_model()
-    embeddings = model.encode(texts)
-    similarity_matrix = cosine_similarity(embeddings)
-    return similarity_matrix
+@st.cache_resource
+def load_text_model():
+    return SentenceTransformer("paraphrase-multilingual-MiniLM-L12-v2")
 
-def compute_clip_similarity(images, texts):
-    """
-    images: list of PIL Images
-    texts: list of strings
-    """
-    model, processor = load_clip_model()
-    inputs = processor(text=texts, images=images, return_tensors="pt", padding=True, truncation=True)
-    outputs = model(**inputs)
-    logits_per_image = outputs.logits_per_image  # shape: [batch_size, text_count]
-    probs = logits_per_image.softmax(dim=1)
-    return probs.detach().numpy()
+clip_model, clip_processor = load_clip_model()
+text_model = load_text_model()
+
+
+# Text embeddings
+@st.cache_data(show_spinner=False)
+def get_text_embedding(text):
+    embedding = text_model.encode(text, convert_to_tensor=True, normalize_embeddings=True)
+    return embedding.cpu().numpy()
+
+
+# Image embeddings
+@st.cache_data(show_spinner=False)
+def get_image_embedding(image: Image.Image):
+    inputs = clip_processor(images=image, return_tensors="pt")
+    outputs = clip_model.get_image_features(**inputs)
+    return outputs[0].detach().numpy()
+
+
+# Compute cosine similarity
+def compute_text_similarity(text1, text2):
+    emb1 = get_text_embedding(text1)
+    emb2 = get_text_embedding(text2)
+    similarity = cosine_similarity([emb1], [emb2])[0][0]
+    return similarity
+
+
+def compute_clip_similarity(image1: Image.Image, image2: Image.Image):
+    emb1 = get_image_embedding(image1)
+    emb2 = get_image_embedding(image2)
+    similarity = cosine_similarity([emb1], [emb2])[0][0]
+    return similarity
