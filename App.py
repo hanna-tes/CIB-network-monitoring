@@ -194,32 +194,45 @@ missing_cols = [col for col in required_cols if col not in df.columns]
 
 if missing_cols:
     st.error(f"❌ Missing required columns: {missing_cols}")
-
+    
+    # Define possible matches (normalized)
     suggestions = {
-        'Influencer': ['source', 'author', 'user', 'username', 'creator', 'authorMeta/name', 'channeltitle'],
-        'Timestamp': ['date', 'time', 'created', 'published', 'createTimeISO'],
-        'text': ['message', 'content', 'body', 'Hit Sentence', 'headline', 'opening text']
+        'Influencer': ['influencer', 'author', 'user', 'username', 'creator', 'authorname', 'authorMeta/name', 'channeltitle'],
+        'Timestamp': ['date', 'time', 'created', 'published', 'timestamp', 'posttime', 'createtimestamp', 'createdat'],
+        'text': ['text', 'message', 'content', 'body', 'caption', 'hit sentence', 'headline', 'opening text', 'fulltext', 'message', 'title']
     }
 
     for col in missing_cols:
-        close_matches = [c for c in df.columns if any(sugg in c.lower().replace(" ", "") for sugg in suggestions.get(col, []))]
-        if close_matches:
-            st.info(f"💡 Did you mean to rename `{close_matches[0]}` → `{col}`?")
+        # Normalize all column names in df
+        norm_cols = {orig: orig.lower().replace(" ", "").replace("_", "") for orig in df.columns}
+        
+        matched_col = None
+        for orig, normalized in norm_cols.items():
+            for sugg in suggestions[col]:
+                s_norm = sugg.lower().replace(" ", "")
+                if s_norm in normalized or normalized in s_norm:
+                    matched_col = orig
+                    break
+            if matched_col:
+                break
+
+        if matched_col:
+            st.success(f"✅ '{matched_col}' → '{col}' (mapped automatically)")
+            df[col] = df[matched_col]
         else:
+            st.warning(f"⚠️ No match found for '{col}'")
             if col == "Influencer":
-                df['Influencer'] = "Unknown_User"
-                st.warning("⚠️ Using 'Unknown_User' for Influencer.")
+                df[col] = "Unknown_User"
             elif col == "text":
-                st.error("🚫 No text column found. Cannot proceed.")
+                st.error("🚫 Cannot proceed without a text column.")
                 st.stop()
             elif col == "Timestamp":
-                df['Timestamp'] = pd.Timestamp.now()
-                st.warning("⚠️ Using current time for Timestamp.")
+                df[col] = pd.Timestamp.now()
 
-# Final check
+# Final validation
 for col in required_cols:
     if col not in df.columns:
-        st.error(f"Still missing: {col}")
+        st.error(f"🛑 Still missing after recovery: '{col}'")
         st.stop()
 
 # Clean up
