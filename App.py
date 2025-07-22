@@ -199,16 +199,30 @@ if df is None or df.empty:
 df.columns = [str(col).strip() for col in df.columns]
 
 col_map = {
+    # Twitter / Meltwater
     'Influencer': 'Source',
-    'Hit Sentence': 'text',
-    'Date': 'Timestamp',
-    'createTimeISO': 'Timestamp',
+    'author': 'Source',
+    'username': 'Source',
+    'user': 'Source',
     'authorMeta/name': 'Source',
+    'Hit Sentence': 'text',
+    'Headline': 'text',
     'message': 'text',
     'title': 'text',
-    'media_name': 'Source',
-    'channeltitle': 'Source'
+    'Date': 'Timestamp',
+    'createTimeISO': 'Timestamp',
+
+    # Telegram / Media
+    'media_name': 'Outlet',           # Don't overwrite Source
+    'channeltitle': 'Channel',        # Also not Source
+    'published_date': 'Timestamp',
+    'pubDate': 'Timestamp',
+
+    # Generic video/text content
+    'description': 'text',
+    'content': 'text',
 }
+
 
 new_columns = []
 for col in df.columns:
