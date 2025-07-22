@@ -262,11 +262,34 @@ df = df.dropna(subset=['text']).reset_index(drop=True)
 df['Timestamp'] = pd.to_datetime(df['Timestamp'], errors='coerce')
 df = df.dropna(subset=['Timestamp']).reset_index(drop=True)
 
-# Add Platform
-if 'URL' in df.columns and 'Platform' not in df.columns:
-    df['Platform'] = df['URL'].apply(infer_platform_from_url)
-elif 'Platform' not in df.columns:
-    df['Platform'] = "Unknown"
+# --- Ensure Source is NOT overwritten by platform ---
+# First, preserve any existing 'Source' before we touch Platform
+if 'Source' in df.columns:
+    st.sidebar.info("🔹 Using mapped 'Source' column for user accounts.")
+else:
+    # Try hard to find influencer field
+    influencer_candidates = ['Influencer', 'author', 'username', 'user', 'creator', 'authorMeta/name', 'channeltitle']
+    found = False
+    for col in influencer_candidates:
+        if col in df.columns:
+            df['Source'] = df[col].astype(str).fillna("Unknown")
+            st.sidebar.success(f"✅ Assigned '{col}' → 'Source'")
+            found = True
+            break
+    if not found:
+        st.warning("⚠️ No valid influencer column found. Using placeholder.")
+        df['Source'] = "Unknown"
+
+# Now safely assign Platform — independent of Source
+if 'Platform' not in df.columns:
+    if 'URL' in df.columns:
+        df['Platform'] = df['URL'].apply(infer_platform_from_url)
+        st.sidebar.info("🌐 'Platform' created from URL parsing.")
+    else:
+        df['Platform'] = "Unknown"
+        st.sidebar.warning("⚠️ No URL column → all platforms marked as 'Unknown'")
+else:
+    st.sidebar.info("🔹 Using existing 'Platform' column.")
 
 # Extract original text
 df['original_text'] = df['text'].apply(extract_original_text)
