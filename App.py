@@ -91,7 +91,7 @@ def standardize_dataframe(df, platform_name=None, source_name=None):
 
     # Build rename dictionary for existing columns
     rename_dict = {col: std for col, std in col_map.items() if col in df.columns}
-    st.write("🔧 Using column mapping:", rename_dict)  # Debug
+    #st.write("🔧 Using column mapping:", rename_dict)  # Debug
 
     standardized = {}
     for std_col in ['Source', 'URL', 'Timestamp', 'text']:
