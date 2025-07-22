@@ -52,7 +52,7 @@ def extract_original_text(text):
 def load_default_dataset():
     url = "https://raw.githubusercontent.com/hanna-tes/CIB-network-monitoring/refs/heads/main/TogoJULYData%20-%20Sheet1.csv"
     try:
-        return pd.read_csv(url, encoding='utf-16', sep='\t', low_memory=False)
+        return pd.read_csv(url)
     except Exception as e:
         st.error(f"Failed to load default dataset: {e}")
         return pd.DataFrame()
