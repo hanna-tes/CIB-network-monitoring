@@ -127,13 +127,14 @@ with tab2:
 
     st.markdown("This table displays groups of posts that are textually similar, possibly indicating coordinated messaging.")
     try:
-        text_sim_df = compute_text_similarity(df)
+        text_sim_df = find_textual_similarities(df)  # ← USE THIS FUNCTION
         if not text_sim_df.empty:
             st.dataframe(text_sim_df[['text1', 'source1', 'time1', 'text2', 'source2', 'time2', 'similarity']])
         else:
             st.info("No significant text similarities found.")
     except Exception as e:
         st.warning(f"⚠️ Similarity computation failed: {e}")
+
 
     #st.markdown("This table shows image pairs with visual or visual-textual similarities using CLIP.")
     #if 'image_path' in df.columns:
