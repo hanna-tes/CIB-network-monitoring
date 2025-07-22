@@ -15,65 +15,63 @@ from modules.clustering_utils import cluster_texts, build_user_interaction_graph
 st.set_page_config(page_title="CIB Dashboard", layout="wide")
 st.title("🕵️ Coordinated Inauthentic Behavior (CIB) Network Monitoring Dashboard")
 
-# --- Sidebar: Choose Dataset Source ---
-st.sidebar.header("📁 Data Source")
-data_option = st.sidebar.radio("Choose data input method:", ["Use default GitHub dataset", "Upload your own file"])
+# === File Upload or Use Default ===
+st.sidebar.header("📁 Upload Dataset")
+uploaded_file = st.sidebar.file_uploader("Upload a CSV/TSV file", type=["csv", "tsv"])
 
-# --- Standard column mapping ---
+# Target columns
+target_columns = ["Source", "Timestamp", "text", "URL", "Platform"]
+
+# Column renaming map
 col_map = {
     'Influencer': 'Source',
     'authorMeta/name': 'Source',
     'media_name': 'Source',
     'channeltitle': 'Source',
-
+    'Date': 'Timestamp',
+    'createTimeISO': 'Timestamp',
     'Hit Sentence': 'text',
     'message': 'text',
-    'title': 'text',
-
-    'Date': 'Timestamp',
-    'createTimeISO': 'Timestamp'
+    'title': 'text'
 }
 
-required_columns = ["Source", "Timestamp", "text", "URL", "Platform"]
+def load_and_standardize_data(df):
+    # Rename columns
+    df.columns = [col_map.get(col, col) for col in df.columns]
+    df = df.rename(columns=str.strip)
 
-# --- Load data ---
-df = None
-
-if data_option == "Upload your own file":
-    uploaded_file = st.sidebar.file_uploader("Upload a CSV or TSV file", type=["csv", "tsv"])
-    if uploaded_file is not None:
-        try:
-            df = pd.read_csv(uploaded_file, encoding="utf-16", sep="\t", low_memory=False)
-            st.sidebar.success("✅ Uploaded file loaded.")
-        except Exception as e:
-            st.sidebar.error(f"❌ Failed to read uploaded file: {e}")
-            st.stop()
-    else:
-        st.warning("👈 Please upload a file to proceed.")
+    # Check if required columns are there after renaming
+    missing = [col for col in target_columns if col not in df.columns]
+    if missing:
+        st.sidebar.error(f"❌ Missing columns: {missing}")
         st.stop()
 
-elif data_option == "Use default GitHub dataset":
-    default_url = "https://raw.githubusercontent.com/hanna-tes/CIB-network-monitoring/refs/heads/main/Togo_OR_Lome%CC%81_OR_togolais_OR_togolaise_AND_manifest%20-%20Jul%207%2C%202025%20-%205%2012%2053%20PM.csv"
+    # Keep only the required columns
+    df = df[target_columns].copy()
+
+    # Clean and parse Timestamp
+    df['Timestamp'] = pd.to_datetime(df['Timestamp'], errors='coerce')
+    df.dropna(subset=["Timestamp", "text"], inplace=True)
+    return df
+
+# Load data
+if uploaded_file is not None:
     try:
-        df = pd.read_csv(default_url, encoding="utf-16", sep="\t", low_memory=False)
-        st.sidebar.success("✅ Loaded default dataset from GitHub.")
+        df = pd.read_csv(uploaded_file, encoding='utf-16', sep='\t', low_memory=False)
+        st.sidebar.success("✅ File uploaded.")
+        df = load_and_standardize_data(df)
+    except Exception as e:
+        st.sidebar.error(f"❌ Failed to read uploaded file: {e}")
+        st.stop()
+else:
+    default_url = "https://raw.githubusercontent.com/hanna-tes/CIB-network-monitoring/main/Togo_OR_Lome%CC%81_OR_togolais_OR_togolaise_AND_manifest%20-%20Jul%207%2C%202025%20-%205%2012%2053%20PM.csv"
+    try:
+        df = pd.read_csv(default_url, encoding='utf-16', sep='\t', low_memory=False)
+        st.sidebar.warning("⚠️ Using default dataset from GitHub.")
+        df = load_and_standardize_data(df)
     except Exception as e:
         st.error(f"❌ Failed to load default dataset: {e}")
         st.stop()
-
-# --- Standardize column names before validation ---
-df.columns = [col_map.get(col.strip(), col.strip()) for col in df.columns]
-
-# --- Validate required columns ---
-missing = [col for col in required_columns if col not in df.columns]
-if missing:
-    st.error(f"❌ Missing required columns: {missing}")
-    st.stop()
-
-# --- Final Cleanup ---
-df = df[required_columns].copy()
-df["Timestamp"] = pd.to_datetime(df["Timestamp"], errors="coerce")
-df.dropna(subset=["Timestamp", "text"], inplace=True)
 
 # --- Preview ---
 st.subheader("📊 Dataset Preview")
