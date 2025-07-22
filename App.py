@@ -9,31 +9,35 @@ import os
 from datetime import timedelta
 
 # Custom modules
-from modules.embedding_utils import compute_text_similarity
+from modules.embedding_utils import compute_text_similarity, compute_visual_clip_similarity
 from modules.clustering_utils import cluster_texts, build_user_interaction_graph
 
 st.set_page_config(page_title="CIB Dashboard", layout="wide")
-st.title("🕵️ Coordinated Inauthentic Behavior (CIB) Network Monitoring Dashboard")
+st.title("🕵️ CIB Network Monitoring Dashboard")
 
-# === File Upload or Use Default ===
+# --- Sidebar: File Upload ---
 st.sidebar.header("📁 Upload Dataset")
-uploaded_file = st.sidebar.file_uploader("Upload a CSV/TSV file", type=["csv", "tsv"])
+uploaded_file = st.sidebar.file_uploader("Upload a CSV or Excel file", type=["csv", "xlsx"])
 
-# Target columns
-#Map various column names to standard ones
+@st.cache_data(show_spinner=False)
+def load_default_dataset():
+    url = "https://raw.githubusercontent.com/hanna-tes/CIB-network-monitoring/refs/heads/main/Togo_OR_Lome%CC%81_OR_togolais_OR_togolaise_AND_manifest%20-%20Jul%207%2C%202025%20-%205%2012%2053%20PM.csv"
+    return pd.read_csv(url, encoding='utf-16', sep='\t', low_memory=False)
+
+# --- Column Mapping ---
 col_map = {
     'Influencer': 'Source',
-    'authorMeta/name': 'Source',
-    'media_name': 'Source',
-    'channeltitle': 'Source',
     'Hit Sentence': 'text',
-    'message': 'text',
-    'title': 'text',
     'Date': 'Timestamp',
     'createTimeISO': 'Timestamp',
+    'authorMeta/name': 'Source',
+    'message': 'text',
+    'title': 'text',
+    'media_name': 'Source',
+    'channeltitle': 'Source'
 }
 
-# Detect platform from URL
+# --- Platform Detection ---
 def infer_platform_from_url(url):
     if pd.isna(url) or not isinstance(url, str) or not url.startswith("http"):
         return "Unknown"
@@ -55,68 +59,47 @@ def infer_platform_from_url(url):
     else:
         return "Unknown"
 
-# Load and clean dataset
-def load_and_standardize_data(df):
-    # Standardize column names
-    df.columns = [col_map.get(col.strip(), col.strip()) for col in df.columns]
-    df = df.rename(columns=str.strip)
-
-    # Required columns
-    essential = ["Source", "Timestamp", "text", "URL"]
-    missing = [col for col in essential if col not in df.columns]
-    if missing:
-        st.sidebar.error(f"❌ Missing required columns: {missing}")
-        st.stop()
-
-    # Add Platform column if missing
-    if "Platform" not in df.columns:
-        df["Platform"] = df["URL"].apply(infer_platform_from_url)
-
-    # Subset only relevant columns
-    df = df[["Source", "Timestamp", "text", "URL", "Platform"]].copy()
-
-    # Clean timestamp
-    df["Timestamp"] = pd.to_datetime(df["Timestamp"], errors="coerce")
-    df.dropna(subset=["Timestamp", "text"], inplace=True)
-    return df
-
-# Load default data from GitHub
-@st.cache_data
-def load_default_dataset():
-    url = "https://raw.githubusercontent.com/hanna-tes/CIB-network-monitoring/refs/heads/main/Togo_OR_Lome%CC%81_OR_togolais_OR_togolaise_AND_manifest%20-%20Jul%207%2C%202025%20-%205%2012%2053%20PM.csv"
-    try:
-        df = pd.read_csv(url, encoding='utf-16', sep='\t', low_memory=False)
-        return df
-    except Exception as e:
-        st.error(f"❌ Failed to load default data: {e}")
-        return pd.DataFrame()
-
-# Sidebar upload or default
-st.sidebar.title("📂 Upload Data")
-uploaded_file = st.sidebar.file_uploader("Upload a CSV file", type=["csv", "tsv"])
-
+# --- Load Data ---
+df = None
 if uploaded_file:
-    st.sidebar.success("✅ File uploaded")
     try:
-        df = pd.read_csv(uploaded_file, encoding='utf-16', sep='\t', low_memory=False)
+        if uploaded_file.name.endswith(".csv"):
+            df = pd.read_csv(uploaded_file, encoding='utf-16', sep='\t', low_memory=False)
+        elif uploaded_file.name.endswith(".xlsx"):
+            df = pd.read_excel(uploaded_file)
     except Exception as e:
-        st.sidebar.error(f"❌ Failed to read uploaded file: {e}")
-        st.stop()
+        st.sidebar.error(f"Failed to load file: {e}")
 else:
-    st.sidebar.warning("⚠️ Using default dataset from GitHub.")
+    st.sidebar.info("Using default demo dataset")
     df = load_default_dataset()
 
-# Standardize & clean data
-if not df.empty:
-    df = load_and_standardize_data(df)
-    st.success(f"✅ Loaded {len(df)} posts from {df['Platform'].nunique()} platforms")
-    st.dataframe(df.head(50))
-else:
-    st.error("❌ No data to display.")
+# --- Standardize Columns ---
+if df is not None and not df.empty:
+    df.columns = [col_map.get(col.strip(), col.strip()) for col in df.columns]
+    df = df.loc[:, ~df.columns.duplicated()]
+    df = df.rename(columns=str.strip)
 
-# --- Preview ---
-st.subheader("📊 Dataset Preview")
-st.dataframe(df.head(10))
+    # Ensure required columns exist
+    required_cols = ["Source", "Timestamp", "text"]
+    for col in required_cols:
+        if col not in df.columns:
+            st.error(f"Missing required column: {col}")
+            st.stop()
+
+    df = df.dropna(subset=['text'])
+    df['Timestamp'] = pd.to_datetime(df['Timestamp'], errors='coerce')
+    df = df.dropna(subset=['Timestamp'])
+
+    if 'URL' in df.columns and 'Platform' not in df.columns:
+        df['Platform'] = df['URL'].apply(infer_platform_from_url)
+
+# --- Sidebar: Export ---
+st.sidebar.markdown("### 📤 Export Results")
+def convert_df(data):
+    return data.to_csv(index=False).encode('utf-8')
+
+csv_data = convert_df(df)
+st.sidebar.download_button("Download Full Data", csv_data, "processed_data.csv", "text/csv")
 
 # --- Tabs ---
 tab1, tab2, tab3 = st.tabs(["📊 Overview", "🔍 Analysis", "🌐 Network & Risk"])
@@ -130,7 +113,7 @@ with tab1:
     st.bar_chart(top_sources)
 
     st.markdown("**Top Hashtags (by frequency):**")
-    df['hashtags'] = df['text'].str.findall(r"#\w+")
+    df['hashtags'] = df['text'].str.findall(r"#\\w+")
     all_hashtags = pd.Series([tag for tags in df['hashtags'] for tag in tags])
     st.bar_chart(all_hashtags.value_counts().head(10))
 
@@ -141,8 +124,7 @@ with tab1:
 # ==================== TAB 2 ====================
 with tab2:
     st.subheader("🧠 Similarity & Coordination Detection")
-    
-    # Text Similarity
+
     st.markdown("This table displays groups of posts that are textually similar, possibly indicating coordinated messaging.")
     try:
         text_sim_df = compute_text_similarity(df)
@@ -153,20 +135,18 @@ with tab2:
     except Exception as e:
         st.warning(f"⚠️ Similarity computation failed: {e}")
 
-    # Visual Similarity (CLIP)
-    #st.markdown("This table shows image pairs with visual or visual-textual similarities using CLIP.")
-    #if 'image_path' in df.columns:
-     #   clip_df = compute_visual_clip_similarity(df)
-      #  if not clip_df.empty:
-      #      st.dataframe(clip_df[['image1', 'image2', 'clip_score']])
-     #   else:
-       #     st.info("No visually similar content detected.")
+    st.markdown("This table shows image pairs with visual or visual-textual similarities using CLIP.")
+    if 'image_path' in df.columns:
+        clip_df = compute_visual_clip_similarity(df)
+        if not clip_df.empty:
+            st.dataframe(clip_df[['image1', 'image2', 'clip_score']])
+        else:
+            st.info("No visually similar content detected.")
 
 # ==================== TAB 3 ====================
 with tab3:
     st.subheader("🚨 High-Risk Accounts & Networks")
 
-    # Clustering for High-Risk Account Grouping
     st.markdown("Accounts have been grouped by coordination patterns (hashtags, URLs, posting behavior). Each cluster may indicate potential coordinated activity.")
     try:
         clustered_df = cluster_texts(df)
@@ -175,7 +155,6 @@ with tab3:
     except Exception as e:
         st.warning(f"⚠️ Clustering failed: {e}")
 
-    # Network Graph
     st.markdown("This network graph shows user interactions, clustered by behavioral similarities. Color represents different coordination clusters.")
     try:
         G, pos, cluster_map = build_user_interaction_graph(df)
