@@ -15,11 +15,11 @@ from modules.clustering_utils import cluster_texts, build_user_interaction_graph
 st.set_page_config(page_title="CIB Dashboard", layout="wide")
 st.title("🕵️ Coordinated Inauthentic Behavior (CIB) Network Monitoring Dashboard")
 
-# === Sidebar: Upload File ===
-st.sidebar.header("📁 Upload Dataset")
-uploaded_file = st.sidebar.file_uploader("Upload a CSV/TSV file", type=["csv", "tsv"])
+# --- Sidebar: Choose Dataset Source ---
+st.sidebar.header("📁 Data Source")
+data_option = st.sidebar.radio("Choose data input method:", ["Use default GitHub dataset", "Upload your own file"])
 
-# === Column standardization map ===
+# --- Standard column mapping ---
 col_map = {
     'Influencer': 'Source',
     'authorMeta/name': 'Source',
@@ -36,44 +36,48 @@ col_map = {
 
 required_columns = ["Source", "Timestamp", "text", "URL", "Platform"]
 
-# === Load dataset ===
-if uploaded_file is not None:
-    try:
-        df = pd.read_csv(uploaded_file, encoding='utf-16', sep='\t', low_memory=False)
-        st.sidebar.success("✅ File uploaded.")
-    except Exception as e:
-        st.sidebar.error(f"❌ Failed to read uploaded file: {e}")
+# --- Load data ---
+df = None
+
+if data_option == "Upload your own file":
+    uploaded_file = st.sidebar.file_uploader("Upload a CSV or TSV file", type=["csv", "tsv"])
+    if uploaded_file is not None:
+        try:
+            df = pd.read_csv(uploaded_file, encoding="utf-16", sep="\t", low_memory=False)
+            st.sidebar.success("✅ Uploaded file loaded.")
+        except Exception as e:
+            st.sidebar.error(f"❌ Failed to read uploaded file: {e}")
+            st.stop()
+    else:
+        st.warning("👈 Please upload a file to proceed.")
         st.stop()
-else:
+
+elif data_option == "Use default GitHub dataset":
     default_url = "https://raw.githubusercontent.com/hanna-tes/CIB-network-monitoring/refs/heads/main/Togo_OR_Lome%CC%81_OR_togolais_OR_togolaise_AND_manifest%20-%20Jul%207%2C%202025%20-%205%2012%2053%20PM.csv"
     try:
-        df = pd.read_csv(default_url, encoding='utf-16', sep='\t', low_memory=False)
-        st.sidebar.warning("⚠️ Using default dataset from GitHub.")
+        df = pd.read_csv(default_url, encoding="utf-16", sep="\t", low_memory=False)
+        st.sidebar.success("✅ Loaded default dataset from GitHub.")
     except Exception as e:
         st.error(f"❌ Failed to load default dataset: {e}")
         st.stop()
 
-# === Standardize columns BEFORE validation ===
+# --- Standardize column names before validation ---
 df.columns = [col_map.get(col.strip(), col.strip()) for col in df.columns]
 
-# === Validate required columns ===
+# --- Validate required columns ---
 missing = [col for col in required_columns if col not in df.columns]
 if missing:
-    st.sidebar.error(f"❌ Missing required columns: {missing}")
+    st.error(f"❌ Missing required columns: {missing}")
     st.stop()
 
-# === Final cleanup ===
+# --- Final Cleanup ---
 df = df[required_columns].copy()
 df["Timestamp"] = pd.to_datetime(df["Timestamp"], errors="coerce")
 df.dropna(subset=["Timestamp", "text"], inplace=True)
 
-# --- Sidebar: Export ---
-st.sidebar.markdown("### 📤 Export Results")
-def convert_df(data):
-    return data.to_csv(index=False).encode('utf-8')
-
-csv_data = convert_df(df)
-st.sidebar.download_button("Download Full Data", csv_data, "processed_data.csv", "text/csv")
+# --- Preview ---
+st.subheader("📊 Dataset Preview")
+st.dataframe(df.head(10))
 
 # --- Tabs ---
 tab1, tab2, tab3 = st.tabs(["📊 Overview", "🔍 Analysis", "🌐 Network & Risk"])
