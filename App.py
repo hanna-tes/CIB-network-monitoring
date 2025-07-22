@@ -123,11 +123,11 @@ if df is None or df.empty:
     st.stop()
 
 # --- Standardize Columns Safely ---
-st.sidebar.subheader("🔧 Data Processing")
+#st.sidebar.subheader("🔧 Data Processing")
 
 # Normalize all column names: strip whitespace and convert to string
 df.columns = [str(col).strip() for col in df.columns]
-st.sidebar.write("**Raw column names detected:**", list(df.columns))
+#st.sidebar.write("**Raw column names detected:**", list(df.columns))
 
 # Define mapping from possible input names to standard internal names
 col_map = {
@@ -165,7 +165,7 @@ df.columns = new_columns
 # Remove duplicate columns (after mapping)
 df = df.loc[:, ~df.columns.duplicated()]
 
-st.sidebar.write("**Mapped column names:**", list(df.columns))
+#st.sidebar.write("**Mapped column names:**", list(df.columns))
 
 # --- Ensure Required Columns Exist ---
 required_cols = ["Source", "Timestamp", "text"]
@@ -272,7 +272,7 @@ with tab1:
     # Top Sources
     st.markdown("**Top Sources (by post count):**")
     top_sources = filtered_df['Source'].value_counts().head(10)
-    fig_src = px.bar(top_sources, title="Top 10 Active Accounts", labels={'value': 'Posts', 'index': 'Account'})
+    fig_src = px.bar(top_sources, title="Top 10 Active Sources", labels={'value': 'Posts', 'index': 'Source'})
     st.plotly_chart(fig_src, use_container_width=True)
 
     # Hashtags
