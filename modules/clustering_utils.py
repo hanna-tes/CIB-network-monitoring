@@ -23,7 +23,7 @@ def cluster_texts(texts, threshold=0.75):
     clustering = AgglomerativeClustering(
         n_clusters=None,
         distance_threshold=1 - threshold,
-        affinity='cosine',
+        metric='cosine',
         linkage='average'
     )
     labels = clustering.fit_predict(embeddings)
