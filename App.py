@@ -122,7 +122,14 @@ if df is None or df.empty:
     st.warning("No data available. Please upload a valid dataset.")
     st.stop()
 
-# --- Standardize Columns ---
+# --- Standardize Columns Safely ---
+st.sidebar.subheader("🔧 Data Processing")
+
+# Normalize all column names: strip whitespace and convert to string
+df.columns = [str(col).strip() for col in df.columns]
+st.sidebar.write("**Raw column names detected:**", list(df.columns))
+
+# Define mapping from possible input names to standard internal names
 col_map = {
     'Influencer': 'Source',
     'Hit Sentence': 'text',
@@ -135,16 +142,81 @@ col_map = {
     'channeltitle': 'Source'
 }
 
-df.columns = [col_map.get(col.strip(), col.strip()) for col in df.columns]
+# Step 1: Apply exact matches from col_map
+new_columns = []
+for col in df.columns:
+    # Direct key match
+    if col in col_map:
+        new_columns.append(col_map[col])
+        continue
+
+    # Case-insensitive + space/underscore-insensitive match
+    matched = None
+    normalized_col = col.lower().replace(" ", "").replace("_", "").replace("-", "")
+    for key, target in col_map.items():
+        norm_key = key.lower().replace(" ", "").replace("_", "").replace("-", "")
+        if normalized_col == norm_key:
+            matched = target
+            break
+    new_columns.append(matched if matched else col)  # Keep original name if no match
+
+df.columns = new_columns
+
+# Remove duplicate columns (after mapping)
 df = df.loc[:, ~df.columns.duplicated()]
-df = df.rename(columns=str.strip)
 
+st.sidebar.write("**Mapped column names:**", list(df.columns))
+
+# --- Ensure Required Columns Exist ---
 required_cols = ["Source", "Timestamp", "text"]
-for col in required_cols:
-    if col not in df.columns:
-        st.error(f"Missing required column: {col}")
-        st.stop()
+missing_cols = [col for col in required_cols if col not in df.columns]
 
+if missing_cols:
+    st.error(f"❌ Missing required columns: {missing_cols}")
+
+    # Provide intelligent suggestions
+    suggestion_guide = {
+        'Source': ['influencer', 'author', 'user', 'username', 'name', 'creator', 'authorname'],
+        'Timestamp': ['date', 'time', 'created', 'posttime', 'published', 'timestamp', 'create'],
+        'text': ['message', 'content', 'body', 'caption', 'hit', 'sentence', 'post', 'description', 'fulltext']
+    }
+
+    for col in missing_cols:
+        st.markdown(f"#### 🛠 How to fix `{col}`")
+        keywords = suggestion_guide.get(col, [])
+        st.write(f"Look for a column containing: _{', '.join(keywords)}_")
+
+        # Show close matches
+        close_matches = []
+        lower_cols = [c.lower() for c in df.columns]
+        for kw in keywords:
+            close_matches += [orig for orig in df.columns if kw in orig.lower()]
+        close_matches = list(set(close_matches))  # Unique
+
+        if close_matches:
+            st.info(f"💡 Possible matches found: `{close_matches}`")
+            st.write("👉 You can:")
+            st.write(f"- Rename manually: `df.rename(columns={{'{close_matches[0]}': '{col}'}})`")
+            st.write(f"- Or add it to `col_map` like: `'${close_matches[0]}': '{col}'`")
+        else:
+            if col == "Source":
+                st.warning("⚠️ No likely source column found. Using `'Unknown'` as placeholder.")
+                df['Source'] = "Unknown"
+            elif col == "text":
+                st.error("🚫 No text column found. Cannot proceed without message content.")
+                st.stop()
+            elif col == "Timestamp":
+                st.warning("⚠️ No timestamp found. Using current time as placeholder.")
+                df['Timestamp'] = pd.Timestamp.now()
+
+    # Re-check after fixes
+    for col in required_cols:
+        if col not in df.columns:
+            st.error(f"Still missing: `{col}` → Cannot continue.")
+            st.stop()
+else:
+    st.sidebar.success("✅ All required columns found!")
+    
 df = df.dropna(subset=['text']).reset_index(drop=True)
 df['Timestamp'] = pd.to_datetime(df['Timestamp'], errors='coerce')
 df = df.dropna(subset=['Timestamp']).reset_index(drop=True)
