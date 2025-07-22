@@ -99,6 +99,19 @@ def find_textual_similarities(df, threshold=0.85):
 
     return pd.DataFrame(similar_pairs)
 
+@st.cache_data(show_spinner="Computing textual similarities...")
+def cached_similarity_analysis(_df, threshold=0.85):
+    return find_textual_similarities(_df, threshold)
+
+@st.cache_data(show_spinner="Clustering texts...")
+def cached_clustering(_df):
+    return cluster_texts(_df)
+
+@st.cache_data(show_spinner="Building network graph...")
+def cached_network_graph(_df):
+    G, pos, cluster_map = build_user_interaction_graph(_df)
+    return G, pos, cluster_map
+
 # --- Sidebar: Upload & Filters ---
 st.sidebar.header("📁 Upload Dataset")
 uploaded_file = st.sidebar.file_uploader("Upload a CSV or Excel file", type=["csv", "xlsx"])
@@ -299,7 +312,7 @@ with tab2:
 
     with st.spinner("Analyzing textual similarities..."):
         try:
-            sim_df = find_textual_similarities(filtered_df, threshold=0.85)
+            sim_df = cached_similarity_analysis(filtered_df, threshold=0.85)
             if not sim_df.empty:
                 st.success(f"✅ Found {len(sim_df)} pairwise similarities indicating coordination.")
 
@@ -337,7 +350,7 @@ with tab3:
 
     # Clustering
     try:
-        clustered_df = cluster_texts(filtered_df)  # Should add 'cluster' column
+        clustered_df = cached_clustering(filtered_df)  # Should add 'cluster' column
         if 'cluster' not in clustered_df.columns:
             raise ValueError("Clustering did not return 'cluster' column")
 
@@ -360,8 +373,8 @@ with tab3:
     # Network Graph
     st.markdown("### 🕸️ User Interaction Network")
     try:
-        G, pos, cluster_map = build_user_interaction_graph(clustered_df if 'clustered_df' in locals() else filtered_df)
-
+        G, pos, cluster_map = cached_network_graph(clustered_df if 'clustered_df' in locals() else filtered_df)
+        
         # Create interactive Plotly network
         edge_trace = []
         for edge in G.edges():
