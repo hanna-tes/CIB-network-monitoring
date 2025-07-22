@@ -13,50 +13,59 @@ from modules.embedding_utils import compute_text_similarity
 from modules.clustering_utils import cluster_texts, build_user_interaction_graph
 
 st.set_page_config(page_title="CIB Dashboard", layout="wide")
-st.title("🕵️ CIB Network Monitoring Dashboard")
+st.title("🕵️ Coordinated Inauthentic Behavior (CIB) Network Monitoring Dashboard")
 
-# --- Sidebar: File Upload ---
+# === Sidebar: Upload File ===
 st.sidebar.header("📁 Upload Dataset")
-uploaded_file = st.sidebar.file_uploader("Upload a CSV or Excel file", type=["csv", "xlsx"])
+uploaded_file = st.sidebar.file_uploader("Upload a CSV/TSV file", type=["csv", "tsv"])
 
-# Replace your load_default_dataset function with this:
-
-@st.cache_data(show_spinner=False)
-def load_default_dataset():
-    url = "https://raw.githubusercontent.com/hanna-tes/CIB-network-monitoring/refs/heads/main/Togo_OR_Lome%CC%81_OR_togolais_OR_togolaise_AND_manifest%20-%20Jul%207%2C%202025%20-%205%2012%2053%20PM.csv"  
-    return pd.read_csv(url, encoding='utf-16', sep='\t', low_memory=False)
-
-# When handling uploaded files:
-
-if uploaded_file:
-    try:
-        if uploaded_file.name.endswith(".csv"):
-            df = pd.read_csv(uploaded_file, encoding='utf-16', sep='\t', low_memory=False)
-        elif uploaded_file.name.endswith(".xlsx"):
-            df = pd.read_excel(uploaded_file)
-    except Exception as e:
-        st.sidebar.error(f"Failed to load file: {e}")
-else:
-    st.sidebar.info("Using default demo dataset")
-    df = load_default_dataset()
-
-# --- Column Standardization ---
+# === Column standardization map ===
 col_map = {
     'Influencer': 'Source',
-    'Hit Sentence': 'text',
-    'Date': 'Timestamp',
-    'createTimeISO': 'Timestamp',
     'authorMeta/name': 'Source',
+    'media_name': 'Source',
+    'channeltitle': 'Source',
+
+    'Hit Sentence': 'text',
     'message': 'text',
     'title': 'text',
-    'media_name': 'Source',
-    'channeltitle': 'Source'
+
+    'Date': 'Timestamp',
+    'createTimeISO': 'Timestamp'
 }
-df.columns = [col_map.get(col, col) for col in df.columns]
-df = df.rename(columns=str.strip)
-df = df.dropna(subset=['text'])
-df['Timestamp'] = pd.to_datetime(df['Timestamp'], errors='coerce')
-df = df.dropna(subset=['Timestamp'])
+
+required_columns = ["Source", "Timestamp", "text", "URL", "Platform"]
+
+# === Load dataset ===
+if uploaded_file is not None:
+    try:
+        df = pd.read_csv(uploaded_file, encoding='utf-16', sep='\t', low_memory=False)
+        st.sidebar.success("✅ File uploaded.")
+    except Exception as e:
+        st.sidebar.error(f"❌ Failed to read uploaded file: {e}")
+        st.stop()
+else:
+    default_url = "https://raw.githubusercontent.com/hanna-tes/CIB-network-monitoring/refs/heads/main/Togo_OR_Lome%CC%81_OR_togolais_OR_togolaise_AND_manifest%20-%20Jul%207%2C%202025%20-%205%2012%2053%20PM.csv"
+    try:
+        df = pd.read_csv(default_url, encoding='utf-16', sep='\t', low_memory=False)
+        st.sidebar.warning("⚠️ Using default dataset from GitHub.")
+    except Exception as e:
+        st.error(f"❌ Failed to load default dataset: {e}")
+        st.stop()
+
+# === Standardize columns BEFORE validation ===
+df.columns = [col_map.get(col.strip(), col.strip()) for col in df.columns]
+
+# === Validate required columns ===
+missing = [col for col in required_columns if col not in df.columns]
+if missing:
+    st.sidebar.error(f"❌ Missing required columns: {missing}")
+    st.stop()
+
+# === Final cleanup ===
+df = df[required_columns].copy()
+df["Timestamp"] = pd.to_datetime(df["Timestamp"], errors="coerce")
+df.dropna(subset=["Timestamp", "text"], inplace=True)
 
 # --- Sidebar: Export ---
 st.sidebar.markdown("### 📤 Export Results")
