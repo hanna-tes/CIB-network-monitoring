@@ -238,11 +238,16 @@ for col in required_cols:
 # Clean text and timestamp safely
 df = df.dropna(subset=['text']).reset_index(drop=True)
 
-# Convert to datetime
+# Step 1: Parse timestamps
 df['Timestamp'] = pd.to_datetime(df['Timestamp'], errors='coerce')
 
-# Drop rows where Timestamp is NaT
+# Step 2: Drop rows with failed parsing
 df = df.dropna(subset=['Timestamp']).reset_index(drop=True)
+
+# Step 3: Localize all timestamps to UTC
+df['Timestamp'] = df['Timestamp'].apply(
+    lambda x: x.tz_convert('UTC') if x.tzinfo else x.tz_localize('UTC')
+)
 
 # Ensure at least one valid timestamp exists
 if df['Timestamp'].empty:
