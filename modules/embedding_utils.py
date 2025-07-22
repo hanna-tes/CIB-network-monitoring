@@ -28,13 +28,6 @@ def get_text_embedding(text):
     return embedding.cpu().numpy()
 
 
-# Image embeddings
-@st.cache_data(show_spinner=False)
-def get_image_embedding(image: Image.Image):
-    inputs = clip_processor(images=image, return_tensors="pt")
-    outputs = clip_model.get_image_features(**inputs)
-    return outputs[0].detach().numpy()
-
 
 # Compute cosine similarity
 def compute_text_similarity(text1, text2):
@@ -44,8 +37,3 @@ def compute_text_similarity(text1, text2):
     return similarity
 
 
-def compute_clip_similarity(image1: Image.Image, image2: Image.Image):
-    emb1 = get_image_embedding(image1)
-    emb2 = get_image_embedding(image2)
-    similarity = cosine_similarity([emb1], [emb2])[0][0]
-    return similarity
