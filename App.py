@@ -9,7 +9,7 @@ import os
 from datetime import timedelta
 
 # Custom modules
-from modules.embedding_utils import compute_text_similarity, compute_visual_clip_similarity
+from modules.embedding_utils import compute_text_similarity
 from modules.clustering_utils import cluster_texts, build_user_interaction_graph
 
 st.set_page_config(page_title="CIB Dashboard", layout="wide")
