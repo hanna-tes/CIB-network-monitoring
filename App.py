@@ -24,7 +24,7 @@ uploaded_file = st.sidebar.file_uploader("Upload a CSV or Excel file", type=["cs
 
 @st.cache_data(show_spinner=False)
 def load_default_dataset():
-    url = "https://raw.githubusercontent.com/hanna-tes/CIB-network-monitoring/refs/heads/main/Togo_OR_Lome%CC%81_OR_togolais_OR_togolaise_AND_manifest%20-%20Jul%207%2C%202025%20-%205%2012%2053%20PM.csv"
+    url = "https://raw.githubusercontent.com/hanna-tes/CIB-network-monitoring/refs/heads/main/TogoJULYData%20-%20Sheet1.csv"
     return pd.read_csv(url, encoding='utf-16', sep='\t', low_memory=False)
 
 # --- Column Mapping ---
