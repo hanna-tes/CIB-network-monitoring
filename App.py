@@ -235,10 +235,23 @@ for col in required_cols:
         st.error(f"🛑 Still missing after recovery: '{col}'")
         st.stop()
 
-# Clean up
+# Clean text and timestamp safely
 df = df.dropna(subset=['text']).reset_index(drop=True)
+
+# Convert to datetime
 df['Timestamp'] = pd.to_datetime(df['Timestamp'], errors='coerce')
+
+# Drop rows where Timestamp is NaT
 df = df.dropna(subset=['Timestamp']).reset_index(drop=True)
+
+# Ensure at least one valid timestamp exists
+if df['Timestamp'].empty:
+    st.error("🚫 No valid timestamps found after cleaning.")
+    st.stop()
+
+# Now extract min/max safely
+min_date = df['Timestamp'].min().date()
+max_date = df['Timestamp'].max().date()
 
 # --- Create 'Platform' Column from URL ---
 if 'URL' in df.columns:
