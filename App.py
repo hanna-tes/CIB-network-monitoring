@@ -11,11 +11,10 @@ import re
 import csv
 from io import StringIO
 
-# Custom modules
+# Custom modules (with fallbacks)
 try:
     from modules.embedding_utils import compute_text_similarity
 except:
-    # Fallback if not available, use TF-IDF directly
     def compute_text_similarity(text1, text2):
         if not isinstance(text1, str) or not isinstance(text2, str):
             return 0.0
@@ -26,7 +25,6 @@ except:
 try:
     from modules.clustering_utils import cluster_texts, build_user_interaction_graph
 except:
-    # Minimal fallbacks
     def cluster_texts(df):
         df = df.copy()
         df['cluster'] = 0
@@ -34,10 +32,10 @@ except:
 
     def build_user_interaction_graph(df):
         G = nx.Graph()
-        sources = df['Source'].dropna().unique()[:10]  # Sample nodes
-        for u in sources:
+        nodes = df['Influencer'].dropna().unique()[:10]
+        for u in nodes:
             G.add_node(u)
-            for v in sources:
+            for v in nodes:
                 if u != v:
                     G.add_edge(u, v, weight=1)
         pos = nx.spring_layout(G, seed=42)
@@ -91,28 +89,22 @@ def load_default_dataset():
         return pd.DataFrame()
 
 
+# Vectorized similarity function
 def find_textual_similarities(df, threshold=0.85):
-    """
-    Fast vectorized version of similarity detection.
-    Uses TF-IDF + cosine similarity matrix on 'original_text'.
-    """
-    clean_df = df[['original_text', 'Source', 'Timestamp']].dropna()
+    clean_df = df[['original_text', 'Influencer', 'Timestamp']].dropna()
     clean_df = clean_df[clean_df['original_text'].str.strip() != ""]
     texts = clean_df['original_text'].tolist()
 
     if len(texts) < 2:
         return pd.DataFrame()
 
-    # Vectorize
     vectorizer = TfidfVectorizer(stop_words='english', max_features=10000)
     tfidf_matrix = vectorizer.fit_transform(texts)
-
-    # Compute similarity matrix
     sim_matrix = cosine_similarity(tfidf_matrix)
+
     np.fill_diagonal(sim_matrix, 0)
     sim_matrix = np.triu(sim_matrix, k=1)  # Upper triangle only
 
-    # Find high-similarity pairs
     idx_i, idx_j = np.where(sim_matrix >= threshold)
     seen = set()
     similar_pairs = []
@@ -128,10 +120,10 @@ def find_textual_similarities(df, threshold=0.85):
 
         similar_pairs.append({
             'text1': row1['original_text'],
-            'source1': row1['Source'],
+            'influencer1': row1['Influencer'],
             'time1': row1['Timestamp'],
             'text2': row2['original_text'],
-            'source2': row2['Source'],
+            'influencer2': row2['Influencer'],
             'time2': row2['Timestamp'],
             'similarity': round(sim_matrix[i, j], 3),
             'shared_narrative': row1['original_text'][:150] + ("..." if len(row1['original_text']) > 150 else "")
@@ -157,7 +149,7 @@ def cached_network_graph(_df):
     return G, pos, cluster_map
 
 
-# --- Sidebar: Upload & Filters ---
+# --- Sidebar: Upload Dataset ---
 st.sidebar.header("📁 Upload Dataset")
 uploaded_file = st.sidebar.file_uploader("Upload a CSV or Excel file", type=["csv", "xlsx"])
 
@@ -195,56 +187,28 @@ if df is None or df.empty:
     st.stop()
 
 
-# --- Standardize Columns Safely ---
-df.columns = [str(col).strip() for col in df.columns]
-
-col_map = {
-    'Influencer': 'Source',
-    'Hit Sentence': 'text',
-    'Date': 'Timestamp',
-    'createTimeISO': 'Timestamp',
-    'authorMeta/name': 'Source',
-    'message': 'text',
-    'title': 'text',
-    'media_name': 'Source',
-    'channeltitle': 'Source'
-}
-
-new_columns = []
-for col in df.columns:
-    if col in col_map:
-        new_columns.append(col_map[col])
-        continue
-    normalized_col = col.lower().replace(" ", "").replace("_", "").replace("-", "")
-    matched = None
-    for key, target in col_map.items():
-        norm_key = key.lower().replace(" ", "").replace("_", "").replace("-", "")
-        if normalized_col == norm_key:
-            matched = target
-            break
-    new_columns.append(matched if matched else col)
-df.columns = new_columns
-df = df.loc[:, ~df.columns.duplicated()]
-
-# --- Ensure Required Columns Exist ---
-required_cols = ["Source", "Timestamp", "text"]
+# --- Keep Original Column Names, Especially 'Influencer' ---
+# Ensure required columns exist
+required_cols = ["Influencer", "Timestamp", "text"]
 missing_cols = [col for col in required_cols if col not in df.columns]
 
 if missing_cols:
     st.error(f"❌ Missing required columns: {missing_cols}")
-    suggestion_guide = {
-        'Source': ['influencer', 'author', 'user', 'username', 'name'],
-        'Timestamp': ['date', 'time', 'created', 'published'],
-        'text': ['hit sentence', 'headline', 'opening text', 'message', 'content']
+
+    suggestions = {
+        'Influencer': ['source', 'author', 'user', 'username', 'creator', 'authorMeta/name', 'channeltitle'],
+        'Timestamp': ['date', 'time', 'created', 'published', 'createTimeISO'],
+        'text': ['message', 'content', 'body', 'Hit Sentence', 'headline', 'opening text']
     }
+
     for col in missing_cols:
-        close_matches = [c for c in df.columns if any(sugg in c.lower().replace(" ", "") for sugg in suggestion_guide.get(col, []))]
+        close_matches = [c for c in df.columns if any(sugg in c.lower().replace(" ", "") for sugg in suggestions.get(col, []))]
         if close_matches:
-            st.info(f"💡 Did you mean to map `{close_matches[0]}` → `{col}`?")
+            st.info(f"💡 Did you mean to rename `{close_matches[0]}` → `{col}`?")
         else:
-            if col == "Source":
-                df['Source'] = "Unknown"
-                st.warning("⚠️ Using 'Unknown' for Source.")
+            if col == "Influencer":
+                df['Influencer'] = "Unknown_User"
+                st.warning("⚠️ Using 'Unknown_User' for Influencer.")
             elif col == "text":
                 st.error("🚫 No text column found. Cannot proceed.")
                 st.stop()
@@ -258,37 +222,19 @@ for col in required_cols:
         st.error(f"Still missing: {col}")
         st.stop()
 
+# Clean up
 df = df.dropna(subset=['text']).reset_index(drop=True)
 df['Timestamp'] = pd.to_datetime(df['Timestamp'], errors='coerce')
 df = df.dropna(subset=['Timestamp']).reset_index(drop=True)
 
-# --- Final Validation: Ensure 'Source' is meaningful and not corrupted ---
-# If after mapping, 'Source' contains only platform-like values, fix it
-common_platforms = ['twitter', 'facebook', 'youtube', 'tiktok', 'instagram', 'telegram', 'media', 'unknown']
-source_sample = df['Source'].astype(str).str.lower().unique()
-
-# Check if Source looks corrupted (contains platforms)
-if any(p in source_sample for p in common_platforms):
-    st.error("❌ Warning: 'Source' column appears to contain PLATFORM or generic names instead of influencers.")
-    
-    # Try to recover using actual influencer column
-    recovery_cols = ['Influencer', 'author', 'username', 'user', 'authorMeta/name', 'channeltitle']
-    recovered = False
-    for col in recovery_cols:
-        if col in df.columns and col != 'Source':
-            real_values = df[col].dropna().astype(str).str.lower()
-            if len(real_values) > 0 and not all(p in real_values.values for p in common_platforms):
-                st.success(f"🔁 Recovering 'Source' from '{col}'")
-                df['Source'] = df[col].fillna("Unknown_User")
-                recovered = True
-                break
-    
-    if not recovered:
-        st.warning("⚠️ Could not recover real influencer data. Keeping current 'Source'.")
+# --- Create 'Platform' Column from URL ---
+if 'URL' in df.columns:
+    df['Platform'] = df['URL'].apply(infer_platform_from_url)
 else:
-    st.sidebar.success("✅ 'Source' verified: contains user/influencer names.")
-    
-# Extract original text
+    df['Platform'] = "Unknown"
+    st.sidebar.warning("⚠️ No URL column → all platforms marked as 'Unknown'")
+
+# Preprocess: Extract original text (remove RT)
 df['original_text'] = df['text'].apply(extract_original_text)
 
 
@@ -298,10 +244,11 @@ min_date = df['Timestamp'].min().date()
 max_date = df['Timestamp'].max().date()
 date_range = st.sidebar.date_input("Date Range", [min_date, max_date])
 
+available_platforms = df['Platform'].dropna().astype(str).unique().tolist()
 platforms = st.sidebar.multiselect(
     "Platforms",
-    options=df['Platform'].unique().tolist(),
-    default=df['Platform'].unique().tolist()
+    options=available_platforms,
+    default=available_platforms
 )
 
 # Apply filters
@@ -335,8 +282,8 @@ tab1, tab2, tab3 = st.tabs(["📊 Overview", "🔍 Analysis", "🌐 Network & Ri
 with tab1:
     st.subheader("📌 Summary Statistics")
 
-    top_sources = filtered_df['Source'].value_counts().head(10)
-    fig_src = px.bar(top_sources, title="Top 10 Active Sources", labels={'value': 'Posts', 'index': 'Source'})
+    top_influencers = filtered_df['Influencer'].value_counts().head(10)
+    fig_src = px.bar(top_influencers, title="Top 10 Influencers", labels={'value': 'Posts', 'index': 'Influencer'})
     st.plotly_chart(fig_src, use_container_width=True)
 
     filtered_df['hashtags'] = filtered_df['text'].str.findall(r'#\w+').apply(lambda x: [tag.lower() for tag in x])
@@ -357,7 +304,6 @@ with tab1:
 with tab2:
     st.subheader("🧠 Narrative Detection & Coordination")
 
-    # Limit analysis size
     MAX_ROWS = st.sidebar.slider("Max posts to analyze", 100, 1000, 300)
     analysis_df = filtered_df.head(MAX_ROWS).copy()
 
@@ -369,7 +315,7 @@ with tab2:
 
         narrative_summary = sim_df.groupby('shared_narrative').agg(
             share_count=('similarity', 'count'),
-            sources_involved=('source1', lambda x: ", ".join(x.astype(str)[:5]) + ("..." if len(x) > 5 else ""))
+            influencers_involved=('influencer1', lambda x: ", ".join(x.astype(str)[:5]) + ("..." if len(x) > 5 else ""))
         ).sort_values(by='share_count', ascending=False).reset_index()
 
         st.markdown("### 🔝 Top Coordinated Narratives")
@@ -398,8 +344,10 @@ with tab3:
 
     try:
         clustered_df = cached_clustering(filtered_df)
-        cluster_counts = clustered_df['cluster'].value_counts()
+        if 'cluster' not in clustered_df.columns:
+            raise ValueError("Clustering did not return 'cluster' column")
 
+        cluster_counts = clustered_df['cluster'].value_counts()
         st.markdown("### 🤖 Detected Coordination Clusters")
         fig_clust = px.bar(
             cluster_counts,
@@ -410,7 +358,7 @@ with tab3:
         )
         st.plotly_chart(fig_clust, use_container_width=True)
 
-        st.dataframe(clustered_df[['Source', 'text', 'Timestamp', 'cluster']])
+        st.dataframe(clustered_df[['Influencer', 'text', 'Timestamp', 'cluster']])
     except Exception as e:
         st.warning(f"⚠️ Clustering failed: {e}")
 
@@ -452,26 +400,27 @@ with tab3:
     except Exception as e:
         st.warning(f"⚠️ Network graph failed: {e}")
 
-    st.markdown("### ⚠️ High-Risk Accounts")
+    st.markdown("### ⚠️ High-Risk Influencers")
     try:
         if 'sim_df' in locals() and not sim_df.empty:
-            all_sources = pd.concat([
-                sim_df[['source1']].rename(columns={'source1': 'Source'}),
-                sim_df[['source2']].rename(columns={'source2': 'Source'})
-            ])['Source']
-            source_counts = all_sources.value_counts()
-            high_risk = source_counts[source_counts >= 3]
+            all_influencers = pd.concat([
+                sim_df[['influencer1']].rename(columns={'influencer1': 'Influencer'}),
+                sim_df[['influencer2']].rename(columns={'influencer2': 'Influencer'})
+            ])['Influencer']
+            influencer_counts = all_influencers.value_counts()
+            high_risk = influencer_counts[influencer_counts >= 3]
+
             if len(high_risk) > 0:
                 fig_hr = px.bar(
                     high_risk,
-                    title="Accounts in ≥3 Coordinated Messages",
-                    labels={'value': 'Coordination Instances', 'index': 'Account'},
+                    title="Influencers in ≥3 Coordinated Messages",
+                    labels={'value': 'Coordination Instances', 'index': 'Influencer'},
                     color='value',
                     color_continuous_scale='Reds'
                 )
                 st.plotly_chart(fig_hr, use_container_width=True)
             else:
-                st.info("No account shared 3+ narratives.")
+                st.info("No influencer shared 3+ narratives.")
         else:
             st.info("No coordinated narratives detected.")
     except Exception as e:
