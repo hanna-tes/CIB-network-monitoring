@@ -58,44 +58,55 @@ def load_default_dataset():
         return pd.DataFrame()
 
 def find_textual_similarities(df, threshold=0.85):
-    """Find similar texts using original content (after removing RT)"""
-    rows = df[['original_text', 'Source', 'Timestamp']].dropna()
-    rows = rows[rows['original_text'] != ""]
+    """
+    Fast vectorized similarity detection using TF-IDF + sparse cosine similarity.
+    Only processes 'original_text' column.
+    """
+    # Clean data
+    clean_df = df[['original_text', 'Source', 'Timestamp']].dropna()
+    clean_df = clean_df[clean_df['original_text'].str.strip() != ""]
+    texts = clean_df['original_text'].tolist()
+    
+    if len(texts) < 2:
+        return pd.DataFrame()
+
+    # Vectorize all texts at once
+    vectorizer = TfidfVectorizer(stop_words='english', max_features=10000)
+    tfidf_matrix = vectorizer.fit_transform(texts)
+
+    # Compute cosine similarity matrix (only upper triangle)
+    from sklearn.metrics.pairwise import cosine_similarity
+    sim_matrix = cosine_similarity(tfidf_matrix)
+    
+    # Zero out diagonal (self-similarity) and lower triangle
+    np.fill_diagonal(sim_matrix, 0)
+    sim_matrix = np.triu(sim_matrix, k=1)  # Keep only upper triangle
+
+    # Find indices where similarity >= threshold
+    idx_i, idx_j = np.where(sim_matrix >= threshold)
+    
     similar_pairs = []
-    seen_combinations = set()
+    seen = set()
 
-    # Convert to list of dicts for faster iteration
-    row_list = [(idx, row) for idx, row in rows.iterrows()]
+    for i, j in zip(idx_i, idx_j):
+        key = tuple(sorted([i, j]))
+        if key in seen:
+            continue
+        seen.add(key)
 
-    for i, (idx1, row1) in enumerate(row_list):
-        for j, (idx2, row2) in enumerate(row_list):
-            if i >= j:
-                continue
+        row1 = clean_df.iloc[i]
+        row2 = clean_df.iloc[j]
 
-            t1, t2 = row1['original_text'], row2['original_text']
-
-            # Exact match first (fast)
-            if t1 == t2:
-                score = 1.0
-            else:
-                score = compute_text_similarity(t1, t2)
-
-            if score >= threshold:
-                key = tuple(sorted([idx1, idx2]))
-                if key in seen_combinations:
-                    continue
-                seen_combinations.add(key)
-
-                similar_pairs.append({
-                    'text1': t1,
-                    'source1': row1['Source'],
-                    'time1': row1['Timestamp'],
-                    'text2': row2['original_text'],
-                    'source2': row2['Source'],
-                    'time2': row2['Timestamp'],
-                    'similarity': round(score, 3),
-                    'shared_narrative': t1[:150] + ("..." if len(t1) > 150 else "")
-                })
+        similar_pairs.append({
+            'text1': row1['original_text'],
+            'source1': row1['Source'],
+            'time1': row1['Timestamp'],
+            'text2': row2['original_text'],
+            'source2': row2['Source'],
+            'time2': row2['Timestamp'],
+            'similarity': round(sim_matrix[i, j], 3),
+            'shared_narrative': row1['original_text'][:150] + ("..." if len(row1['original_text']) > 150 else "")
+        })
 
     return pd.DataFrame(similar_pairs)
 
@@ -307,12 +318,14 @@ with tab1:
 
 
 # ==================== TAB 2: Similarity & Coordination ====================
+ Let user control analysis depth
+max_analyze = st.sidebar.slider("Max posts to analyze for coordination", 100, 1000, 300)
+analysis_df = filtered_df.head(max_analyze).copy()
+
 with tab2:
     st.subheader("🧠 Narrative Detection & Coordination")
-
-    with st.spinner("Analyzing textual similarities..."):
-        try:
-            sim_df = cached_similarity_analysis(filtered_df, threshold=0.85)
+    with st.spinner(f"🔍 Analyzing {len(analysis_df)} posts for coordination..."):
+        sim_df = cached_similarity_analysis(analysis_df, threshold=0.85)
             if not sim_df.empty:
                 st.success(f"✅ Found {len(sim_df)} pairwise similarities indicating coordination.")
 
