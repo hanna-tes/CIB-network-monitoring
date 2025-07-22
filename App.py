@@ -273,9 +273,16 @@ for col in required_cols:
         st.stop()
 
 df = df.dropna(subset=['text']).reset_index(drop=True)
+# Clean & normalize timestamps to UTC
 df['Timestamp'] = pd.to_datetime(df['Timestamp'], errors='coerce')
+
+# Drop rows with no valid time
 df = df.dropna(subset=['Timestamp']).reset_index(drop=True)
 
+# Convert to UTC (timezone-aware)
+df['Timestamp'] = df['Timestamp'].apply(
+    lambda x: x.tz_convert('UTC') if x.tzinfo is not None else x.tz_localize('UTC')
+)
 # Add Platform
 if 'URL' in df.columns and 'Platform' not in df.columns:
     df['Platform'] = df['URL'].apply(infer_platform_from_url)
