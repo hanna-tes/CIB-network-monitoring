@@ -19,15 +19,19 @@ st.title("🕵️ CIB Network Monitoring Dashboard")
 st.sidebar.header("📁 Upload Dataset")
 uploaded_file = st.sidebar.file_uploader("Upload a CSV or Excel file", type=["csv", "xlsx"])
 
+# Replace your load_default_dataset function with this:
+
 @st.cache_data(show_spinner=False)
 def load_default_dataset():
-    return pd.read_csv("sample_data/demo_posts.csv")
+    url = "https://raw.githubusercontent.com/hanna-tes/CIB-network-monitoring/refs/heads/main/your_file.csv"  # Replace with your actual raw CSV URL
+    return pd.read_csv(url, encoding='utf-16', sep='\t', low_memory=False)
 
-df = None
+# When handling uploaded files:
+
 if uploaded_file:
     try:
         if uploaded_file.name.endswith(".csv"):
-            df = pd.read_csv(uploaded_file)
+            df = pd.read_csv(uploaded_file, encoding='utf-16', sep='\t', low_memory=False)
         elif uploaded_file.name.endswith(".xlsx"):
             df = pd.read_excel(uploaded_file)
     except Exception as e:
@@ -98,13 +102,13 @@ with tab2:
         st.warning(f"⚠️ Similarity computation failed: {e}")
 
     # Visual Similarity (CLIP)
-    st.markdown("This table shows image pairs with visual or visual-textual similarities using CLIP.")
-    if 'image_path' in df.columns:
-        clip_df = compute_visual_clip_similarity(df)
-        if not clip_df.empty:
-            st.dataframe(clip_df[['image1', 'image2', 'clip_score']])
-        else:
-            st.info("No visually similar content detected.")
+    #st.markdown("This table shows image pairs with visual or visual-textual similarities using CLIP.")
+    #if 'image_path' in df.columns:
+     #   clip_df = compute_visual_clip_similarity(df)
+      #  if not clip_df.empty:
+      #      st.dataframe(clip_df[['image1', 'image2', 'clip_score']])
+     #   else:
+       #     st.info("No visually similar content detected.")
 
 # ==================== TAB 3 ====================
 with tab3:
