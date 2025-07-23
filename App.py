@@ -425,31 +425,31 @@ user_text_col = st.sidebar.selectbox(
     "Main Text Column",
     options=column_selection_options,
     index=get_default_index("text", column_selection_options),
-    help="Select the column containing the main text of the posts (e.g., 'message', 'content', 'FullText', 'text', 'Hit Sentence')."
+    help="Select the column containing the main text of the posts (e.g., 'message', 'content', 'FullText')."
 )
 user_influencer_col = st.sidebar.selectbox(
     "Influencer/Author Column",
     options=column_selection_options,
     index=get_default_index("Influencer", column_selection_options),
-    help="Select the column identifying the influencer or author (e.g., 'username', 'author', 'Source', 'authorMeta/name', 'Influencer')."
+    help="Select the column identifying the influencer or author (e.g., 'username', 'author', 'Source')."
 )
 user_timestamp_col = st.sidebar.selectbox(
     "Timestamp Column",
     options=column_selection_options,
     index=get_default_index("Timestamp", column_selection_options),
-    help="Select the column containing the date and time of the post (e.g., 'Date', 'publish_date', 'created_at')."
+    help="Select the column containing the date and time of the post (e.g., 'Date', 'published_date', 'created_at')."
 )
 user_url_col = st.sidebar.selectbox(
     "URL Column",
     options=column_selection_options,
     index=get_default_index("URL", column_selection_options),
-    help="Select the column with the URL of the post (e.g., 'link', 'post_url', 'webVideoUrl', 'URL', 'media_url', 'url'). This is used to infer the platform."
+    help="Select the column with the URL of the post (e.g., 'link', 'post_url', 'webVideoUrl'). This is used to infer the platform."
 )
 user_outlet_col = st.sidebar.selectbox(
     "Media Outlet/Channel Column (Optional)",
     options=column_selection_options,
     index=get_default_index("Outlet", column_selection_options),
-    help="Select the column for media outlet or channel. (e.g., 'Twitter', 'Facebook', 'Media outlet', 'TikTok', 'Telegram') This can be used as a fallback for Influencer if no specific influencer column is found."
+    help="Select the column for media outlet or channel. This can be used as a fallback for Influencer if no specific influencer column is found."
 )
 
 # Warn if default selection is still present for critical columns
@@ -560,20 +560,30 @@ with tab1:
             fig_chan = px.bar(top_channels, title="Top 10 Channels", labels={'value': 'Posts', 'index': 'Channel'})
             st.plotly_chart(fig_chan, use_container_width=True)
 
-        if 'text' in filtered_df.columns and not filtered_df['text'].empty:
-            st.write("This chart highlights the top 10 most frequently used hashtags in the filtered posts.")
-            filtered_df['hashtags'] = filtered_df['text'].astype(str).str.findall(r'#\w+').apply(lambda x: [tag.lower() for tag in x])
-
-            all_hashtags = [tag for tags_list in filtered_df['hashtags'] if isinstance(tags_list, list) for tag in tags_list if tags_list]
-
-            if all_hashtags:
-                hashtag_counts = pd.Series(all_hashtags).value_counts().head(10)
-                fig_ht = px.bar(hashtag_counts, title="Top 10 Hashtags", labels={'value': 'Frequency', 'index': 'Hashtag'})
-                st.plotly_chart(fig_ht, use_container_width=True)
+        # Conditional display for Top 10 Hashtags
+        if 'Platform' in filtered_df.columns and not filtered_df['Platform'].empty:
+            unique_platforms = filtered_df['Platform'].dropna().unique()
+            # Check if 'Media' is the ONLY platform present in the filtered data
+            if len(unique_platforms) == 1 and 'Media' in unique_platforms:
+                st.info("Hashtag analysis skipped: Data primarily consists of 'Media' content where hashtags are often not applicable.")
             else:
-                st.info("No hashtags found in the filtered data 'text' column.")
+                if 'text' in filtered_df.columns and not filtered_df['text'].empty:
+                    st.write("This chart highlights the top 10 most frequently used hashtags in the filtered posts.")
+                    filtered_df['hashtags'] = filtered_df['text'].astype(str).str.findall(r'#\w+').apply(lambda x: [tag.lower() for tag in x])
+
+                    all_hashtags = [tag for tags_list in filtered_df['hashtags'] if isinstance(tags_list, list) for tag in tags_list if tags_list]
+
+                    if all_hashtags:
+                        hashtag_counts = pd.Series(all_hashtags).value_counts().head(10)
+                        fig_ht = px.bar(hashtag_counts, title="Top 10 Hashtags", labels={'value': 'Frequency', 'index': 'Hashtag'})
+                        st.plotly_chart(fig_ht, use_container_width=True)
+                    else:
+                        st.info("No hashtags found in the filtered data 'text' column.")
+                else:
+                    st.info("No 'text' column found or it's empty to extract hashtags.")
         else:
-            st.info("No 'text' column found or it's empty to extract hashtags.")
+            st.info("Cannot determine platform for hashtag analysis (no 'Platform' column or empty).")
+
 
         st.write("This area chart visualizes the daily volume of posts over the selected date range.")
         time_series = filtered_df.set_index('Timestamp').resample('D').size()
@@ -585,6 +595,11 @@ with tab1:
 # ==================== TAB 2: Similarity & Coordination ====================
 with tab2:
     st.subheader("🧠 Narrative Detection & Coordination")
+    st.markdown("""
+        This section helps identify **coordination** by finding very similar messages posted by different influencers.
+        When different accounts share very similar messages, it can suggest they are working together or amplifying the same ideas.
+        A high similarity score (close to 1.0) means the texts are almost identical.
+    """)
     MAX_ROWS = st.sidebar.slider("Max posts to analyze for similarity", 100, 1000, 300)
     
     # Ensure original_text column is present and valid
@@ -688,6 +703,15 @@ with tab3:
         st.warning(f"⚠️ Clustering analysis failed: {e}")
 
     st.markdown("### 🕸️ User Interaction Network")
+    st.markdown("""
+        This interactive graph shows how different **influencers** (represented by **nodes** or circles) are connected.
+        A line (or **edge**) between two influencers means they have shared similar content or been part of the same coordinated narrative (cluster).
+        
+        **How to interpret the colors:**
+        The colors of the nodes are assigned automatically to visually group influencers that belong to the same detected cluster.
+        For example, all influencers within the 'blue' group are part of one coordinated cluster, while those in the 'green' group belong to a different one.
+        The specific meaning of each color is not fixed (e.g., 'red' doesn't always mean the same thing across different analyses), but its purpose is to help you quickly see which influencers are working together on similar themes.
+    """)
     try:
         # Ensure graph_df is always a fresh copy of the relevant DataFrame
         graph_df = clustered_df.copy() if 'clustered_df' in locals() and not clustered_df.empty else filtered_df.copy()
@@ -786,6 +810,11 @@ with tab3:
         st.warning(f"⚠️ Network graph failed: {e}")
 
     st.markdown("### ⚠️ High-Risk Influencers")
+    st.markdown("""
+        **High-risk influencers** are those who frequently participate in **coordinated messages**.
+        This chart highlights influencers who appear in 3 or more similar messages.
+        A high count here could indicate that an influencer is a central figure in spreading specific narratives or is part of a concentrated effort.
+    """)
     try:
         if 'sim_df' in locals() and not sim_df.empty:
             all_influencers = pd.concat([
