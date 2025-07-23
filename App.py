@@ -360,14 +360,15 @@ def cached_clustering(_df):
         if 'text' not in _df.columns:
             _df['text'] = _df['original_text']
         _df['text'] = _df['text'].astype(str)
+        # Attempt to cluster
         return cluster_texts(_df)
     except ImportError:
-        st.warning(f"Clustering module 'modules.clustering_utils' not found. Falling back to dummy clustering.")
+        st.warning(f"Clustering module 'modules.clustering_utils' not found. Falling back to dummy clustering (all to Cluster 0).")
         _df = _df.copy()
         _df['cluster'] = 0 # Assign all to one cluster if module is missing
         return _df
     except Exception as e:
-        st.warning(f"Clustering module failed to import or execute. Falling back to dummy clustering. Error: {e}")
+        st.warning(f"Clustering module failed to import or execute. Falling back to dummy clustering (all to Cluster 0). Error: {e}")
         _df = _df.copy()
         _df['cluster'] = 0
         return _df
@@ -401,7 +402,7 @@ def cached_network_graph(_df):
                 G.add_node(nodes[0])
 
         pos = nx.spring_layout(G, seed=42)
-        cluster_map = {n: 0 for n in G.nodes}
+        cluster_map = {n: 0 for n in G.nodes} # Assign all to cluster 0 in dummy graph
         return G, pos, cluster_map
     except Exception as e:
         st.warning(f"Network graph module failed to import or execute. Falling back to dummy graph. Error: {e}")
@@ -422,7 +423,7 @@ def cached_network_graph(_df):
                 G.add_node(nodes[0])
 
         pos = nx.spring_layout(G, seed=42)
-        cluster_map = {n: 0 for n in G.nodes}
+        cluster_map = {n: 0 for n in G.nodes} # Assign all to cluster 0 in dummy graph
         return G, pos, cluster_map
 
 # --- Data Source Selection ---
