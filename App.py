@@ -332,14 +332,18 @@ df = preprocess_data(df)
 
 # --- Sidebar Filters ---
 st.sidebar.header("🔍 Filters")
+
+# 🧱 Ensure all Timestamps are valid datetime objects
+df = df[pd.to_datetime(df['Timestamp'], errors='coerce').notna()]
+df['Timestamp'] = pd.to_datetime(df['Timestamp'], errors='coerce')
+df = df.dropna(subset=["Timestamp"]).reset_index(drop=True)
+
+# 📅 Set default min/max dates for date filter
 min_date = df['Timestamp'].min().date()
 max_date = df['Timestamp'].max().date()
-date_range = st.sidebar.date_input(
-    "Date Range",
-    value=[min_date, max_date],
-    min_value=min_date,
-    max_value=max_date
-)
+
+# 🧭 Date range filter
+date_range = st.sidebar.date_input("Date Range", [min_date, max_date])
 
 available_platforms = df['Platform'].dropna().astype(str).unique().tolist()
 platforms = st.sidebar.multiselect(
