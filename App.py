@@ -624,7 +624,6 @@ with tab2:
 with tab3:
     st.subheader("🚨 High-Risk Accounts & Networks")
     
-    # New slider for max influencers in graph
     max_influencers_graph = st.sidebar.slider(
         "Max Influencers for Network Graph", 
         min_value=10, max_value=200, value=50, step=10,
@@ -644,7 +643,6 @@ with tab3:
 
         if not clustered_df.empty:
             cluster_counts = clustered_df['cluster'].value_counts()
-            # Exclude noise cluster (-1) from counts for visualization
             if -1 in cluster_counts.index:
                 noise_count = cluster_counts[-1]
                 cluster_counts = cluster_counts.drop(index=-1)
@@ -678,33 +676,119 @@ with tab3:
         if graph_df.empty or graph_df['Influencer'].dropna().empty:
             st.info("No valid influencer data to build the network graph.")
         else:
-            # Filter graph_df based on max_influencers_graph
-            # Prioritize influencers in non-noise clusters (cluster != -1), then top influencers by post count
-            
-            # 1. Get influencers who are part of actual clusters (not noise)
             clustered_influencers = graph_df[graph_df['cluster'] != -1]['Influencer'].value_counts().index.tolist()
-            
-            # 2. Get all influencers sorted by post count
             all_influencers_by_post = graph_df['Influencer'].value_counts().index.tolist()
             
-            # Combine and get unique influencers up to max_influencers_graph, prioritizing clustered ones
             selected_influencers = []
             seen_influencers = set()
             
-            # Add clustered influencers first
             for inf in clustered_influencers:
                 if inf not in seen_influencers and len(selected_influencers) < max_influencers_graph:
                     selected_influencers.append(inf)
                     seen_influencers.add(inf)
             
-            # Fill up with other top influencers if max_influencers_graph limit isn't reached
             for inf in all_influencers_by_post:
                 if inf not in seen_influencers and len(selected_influencers) < max_influencers_graph:
                     selected_influencers.append(inf)
                     seen_influencers.add(inf)
             
-            # Filter the DataFrame to only include posts from selected influencers
             graph_df_subset = graph_df[graph_df['Influencer'].isin(selected_influencers)].copy()
 
             if graph_df_subset.empty:
-                st.info("
+                st.info("No data for selected influencers to build the network graph. Try increasing the 'Max Influencers for Network Graph' slider.")
+            else:
+                G, pos, cluster_map = cached_network_graph(graph_df_subset) 
+
+                if not G.nodes():
+                    st.info("No nodes to display in the network graph. This might be due to filtered data or issues in graph creation.")
+                else:
+                    edge_trace = []
+                    for edge in G.edges():
+                        x0, y0 = pos[edge[0]]
+                        x1, y1 = pos[edge[1]]
+                        edge_trace.append(go.Scatter(x=[x0, x1], y=[y0, y1], mode='lines', line=dict(width=0.8, color='#888'), hoverinfo='none'))
+
+                    node_colors = [cluster_map.get(node, -2) for node in G.nodes()] 
+                    unique_clusters = sorted(list(set(node_colors)))
+
+                    color_map = {c: i for i, c in enumerate(unique_clusters)}
+                    mapped_node_colors = [color_map[c] for c in node_colors]
+
+                    if len(unique_clusters) == 1:
+                        marker_colorscale = px.colors.qualitative.Plotly[0] 
+                        node_color_vals = [marker_colorscale] * len(mapped_node_colors)
+                        colorbar_dict = None
+                    else:
+                        color_palette = px.colors.qualitative.Set3 
+                        extended_color_palette = color_palette * ((len(unique_clusters) // len(color_palette)) + 1)
+                        
+                        marker_colors = [extended_color_palette[color_map[c]] for c in unique_clusters]
+                        
+                        node_color_vals = [extended_color_palette[color_map[c]] for c in node_colors]
+
+                        colorbar_dict = dict(
+                            title="Clusters",
+                            tickvals=[color_map[c] for c in unique_clusters], 
+                            ticktext=[str(c) for c in unique_clusters], 
+                            x=1.02, 
+                            xanchor="left",
+                            len=0.7 
+                        )
+
+                    node_trace = go.Scatter(
+                        x=[pos[node][0] for node in G.nodes()],
+                        y=[pos[node][1] for node in G.nodes()],
+                        text=[f"Influencer: {node}<br>Cluster: {cluster_map.get(node, 'N/A')}" for node in G.nodes()],
+                        mode='markers+text',
+                        textposition="top center",
+                        marker=dict(
+                            size=12,
+                            color=node_color_vals, 
+                            line=dict(width=2, color='darkblue'),
+                            colorbar=colorbar_dict 
+                        ),
+                        hoverinfo='text'
+                    )
+
+                    st.write("This interactive graph visualizes the network of influencers, with nodes representing influencers and edges indicating interactions or shared narratives. Nodes are colored by their detected cluster.")
+                    if len(selected_influencers) < len(seen_influencers): 
+                         st.info(f"Displaying a subset of {len(G.nodes())} influencers in the network graph based on your filter and the 'Max Influencers for Network Graph' setting. Adjust the slider in the sidebar to include more influencers.")
+                    fig_net = go.Figure(data=edge_trace + [node_trace],
+                                        layout=go.Layout(
+                                            title="User Network (Click & Drag to Explore)",
+                                            showlegend=False,
+                                            hovermode='closest',
+                                            margin=dict(b=20, l=5, r=5, t=60),
+                                            xaxis=dict(showgrid=False, zeroline=False, showticklabels=False),
+                                            yaxis=dict(showgrid=False, zeroline=False, showticklabels=False),
+                                            height=600))
+                    st.plotly_chart(fig_net, use_container_width=True)
+    except Exception as e:
+        st.warning(f"⚠️ Network graph failed: {e}")
+
+    st.markdown("### ⚠️ High-Risk Influencers")
+    try:
+        if 'sim_df' in locals() and not sim_df.empty:
+            all_influencers = pd.concat([
+                sim_df[['influencer1']].rename(columns={'influencer1': 'Influencer'}),
+                sim_df[['influencer2']].rename(columns={'influencer2': 'Influencer'})
+            ])['Influencer'].dropna().astype(str)
+            influencer_counts = all_influencers.value_counts()
+            high_risk = influencer_counts[influencer_counts >= 3]
+
+            if not high_risk.empty:
+                st.write("This chart identifies influencers who appear in 3 or more coordinated messages, potentially indicating high-risk accounts.")
+                fig_hr = px.bar(
+                    high_risk,
+                    title="Influencers in ≥3 Coordinated Messages",
+                    labels={'value': 'Coordination Instances', 'index': 'Influencer'},
+                    color='value',
+                    color_continuous_scale='Reds'
+                )
+                st.plotly_chart(fig_hr, use_container_width=True)
+            else:
+                st.info("No influencers found participating in 3 or more coordinated messages.")
+        else:
+            st.info("No coordinated narratives detected to identify high-risk influencers.")
+    except Exception as e:
+        st.warning(f"Risk analysis failed: {e}")
