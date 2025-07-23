@@ -77,26 +77,21 @@ def preprocess_data(df, user_text_col, user_influencer_col, user_timestamp_col, 
 
     # --- Create 'text' column using user-defined name or fallbacks ---
     df['text'] = ''
-    found_primary_text_col = False
     
     # Try user-defined text column first
-    if user_text_col and user_text_col in df.columns:
+    if user_text_col and user_text_col in df.columns and not df[user_text_col].astype(str).str.strip().eq('').all():
         df['text'] = df[user_text_col].astype(str).replace('nan', np.nan).fillna('')
-        if not df['text'].astype(str).str.strip().eq('').all():
-            found_primary_text_col = True
-    
-    if not found_primary_text_col:
+    else:
         text_candidates_fallback = ['text', 'Hit Sentence', 'Opening Text', 'Headline', 'message', 'title', 'content', 'description', 'Body', 'FullText']
+        found_text_fallback = False
         for col_name in text_candidates_fallback:
-            if col_name in df.columns:
+            if col_name in df.columns and not df[col_name].astype(str).str.strip().eq('').all():
                 df['text'] = df[col_name].astype(str).replace('nan', np.nan).fillna('')
-                if not df['text'].astype(str).str.strip().eq('').all():
-                    found_primary_text_col = True
-                    break
-    
-    if not found_primary_text_col:
-        st.warning("⚠️ No suitable text column found. 'text' column might be empty.")
-        df['text'] = ""
+                found_text_fallback = True
+                break
+        if not found_text_fallback:
+            st.warning("⚠️ No suitable text column found. 'text' column might be empty.")
+            df['text'] = ""
 
     df['text'] = df['text'].astype(str).replace('nan', np.nan)
     df = df.dropna(subset=['text']).reset_index(drop=True)
@@ -106,48 +101,49 @@ def preprocess_data(df, user_text_col, user_influencer_col, user_timestamp_col, 
     # --- Populate 'Influencer' column using user-defined name or fallbacks ---
     df['Influencer'] = "Unknown_User"
 
-    if user_influencer_col and user_influencer_col in df.columns:
+    # 1. Try user-defined influencer column
+    if user_influencer_col and user_influencer_col in df.columns and not df[user_influencer_col].astype(str).str.strip().eq('').all():
         df['Influencer'] = df[user_influencer_col].astype(str).replace('nan', np.nan).fillna('Unknown_User')
     else:
+        # 2. Fallback to predefined influencer candidates
         influencer_candidates_fallback = [
             'Influencer', 'author', 'username', 'user', 'authorMeta/name', 'creator', 'authorname', 'Source'
         ]
+        found_influencer_fallback = False
         for col_name in influencer_candidates_fallback:
-            if col_name in df.columns and (df['Influencer'] == "Unknown_User").any(): # Only update if still 'Unknown_User'
-                df['Influencer'] = df['Influencer'].mask(
-                    (df['Influencer'] == "Unknown_User") | df['Influencer'].astype(str).str.strip().eq(''),
-                    df[col_name].astype(str).replace('nan', np.nan).fillna('Unknown_User')
-                )
-    
-    # Last resort: Use Outlet as Influencer if no other influencer found
-    if user_outlet_col and user_outlet_col in df.columns:
-        df['Outlet'] = df[user_outlet_col].astype(str).replace('nan', np.nan).fillna('Unknown_Outlet')
-        df['Influencer'] = df['Influencer'].mask(
-            (df['Influencer'] == "Unknown_User") | df['Influencer'].astype(str).str.strip().eq(''),
-            df['Outlet'].astype(str).replace('nan', np.nan).fillna('Unknown_User')
-        )
-    else: # Fallback for outlet if user didn't specify
-        outlet_candidates_fallback = ['media_name', 'channeltitle', 'source']
-        for col_name in outlet_candidates_fallback:
-            if col_name in df.columns:
-                df['Outlet'] = df[col_name].astype(str).replace('nan', np.nan).fillna('Unknown_Outlet')
-                df['Influencer'] = df['Influencer'].mask(
-                    (df['Influencer'] == "Unknown_User") | df['Influencer'].astype(str).str.strip().eq(''),
-                    df['Outlet'].astype(str).replace('nan', np.nan).fillna('Unknown_User')
-                )
+            if col_name in df.columns and not df[col_name].astype(str).str.strip().eq('').all():
+                df['Influencer'] = df[col_name].astype(str).replace('nan', np.nan).fillna('Unknown_User')
+                found_influencer_fallback = True
                 break
-
+        
+        # 3. Last resort: Use Outlet as Influencer if no other influencer found
+        if not found_influencer_fallback:
+            df['Outlet'] = "Unknown_Outlet"
+            # Try user-defined outlet column
+            if user_outlet_col and user_outlet_col in df.columns and not df[user_outlet_col].astype(str).str.strip().eq('').all():
+                df['Outlet'] = df[user_outlet_col].astype(str).replace('nan', np.nan).fillna('Unknown_Outlet')
+            else:
+                # Fallback for outlet if user didn't specify or it's empty
+                outlet_candidates_fallback = ['media_name', 'channeltitle', 'source']
+                for col_name in outlet_candidates_fallback:
+                    if col_name in df.columns and not df[col_name].astype(str).str.strip().eq('').all():
+                        df['Outlet'] = df[col_name].astype(str).replace('nan', np.nan).fillna('Unknown_Outlet')
+                        break
+            
+            # If Outlet was found and Influencer is still "Unknown_User", use Outlet
+            if not df['Outlet'].astype(str).str.strip().eq('Unknown_Outlet').all() and df['Influencer'].astype(str).str.strip().eq('Unknown_User').all():
+                df['Influencer'] = df['Outlet']
 
     df['Influencer'] = df['Influencer'].astype(str).replace('nan', np.nan).fillna('Unknown_User')
     
     # --- Timestamp Parsing using user-defined name or fallbacks ---
     df['Timestamp'] = pd.NaT # Initialize with Not a Time
     
+    # 1. Try user-defined timestamp column first
     if user_timestamp_col and user_timestamp_col in df.columns:
-        # st.info(f"Attempting to parse timestamp using user-defined column: '{user_timestamp_col}'") # Commented out
         df['Timestamp'] = pd.to_datetime(df[user_timestamp_col], errors='coerce')
     
-    # Fallback to predefined timestamp columns if user-defined failed or not provided
+    # 2. Fallback to predefined timestamp columns if user-defined failed or not provided/empty
     if df['Timestamp'].isna().all(): # If all values are NaT after user-defined attempt
         st.warning("⚠️ User-defined Timestamp column failed or not found. Falling back to other date candidates.")
         date_candidates_fallback = ['Date', 'createTimeISO', 'published_date', 'pubDate', 'created_at', 'Alternate Date Format']
@@ -155,7 +151,6 @@ def preprocess_data(df, user_text_col, user_influencer_col, user_timestamp_col, 
             if col_name in df.columns:
                 df['Timestamp'] = pd.to_datetime(df[col_name], errors='coerce')
                 if not df['Timestamp'].isna().all():
-                    # st.info(f"Successfully parsed timestamp using fallback column: '{col_name}'") # Commented out
                     break
     
     date_formats = [
@@ -210,17 +205,23 @@ def preprocess_data(df, user_text_col, user_influencer_col, user_timestamp_col, 
     # --- Create 'URL' column using user-defined name or fallbacks ---
     df['URL'] = np.nan # Initialize as NaN
 
-    if user_url_col and user_url_col in df.columns:
+    # 1. Try user-defined URL column first
+    if user_url_col and user_url_col in df.columns and not df[user_url_col].astype(str).str.strip().eq('').all():
         df['URL'] = df[user_url_col].astype(str).replace('nan', np.nan).fillna(np.nan)
     else:
+        # 2. Fallback to predefined URL candidates
         url_candidates_fallback = ['URL', 'url', 'webVideoUrl', 'link', 'post_url']
+        found_url_fallback = False
         for col_name in url_candidates_fallback:
-            if col_name in df.columns:
+            if col_name in df.columns and not df[col_name].astype(str).str.strip().eq('').all():
                 df['URL'] = df[col_name].astype(str).replace('nan', np.nan).fillna(np.nan)
+                found_url_fallback = True
                 break
+        if not found_url_fallback:
+            st.sidebar.warning("⚠️ No suitable URL column found. Platform detection will be limited.")
     
     # --- Create 'Platform' from URL ---
-    if 'URL' in df.columns and not df['URL'].empty:
+    if 'URL' in df.columns and not df['URL'].empty and df['URL'].notna().any():
         df['Platform'] = df['URL'].apply(infer_platform_from_url)
     else:
         df['Platform'] = "Unknown"
@@ -508,6 +509,12 @@ tab1, tab2, tab3 = st.tabs(["📊 Overview", "🔍 Analysis", "🌐 Network & Ri
 # ==================== TAB 1: Overview ====================
 with tab1:
     st.subheader("📌 Summary Statistics")
+
+    st.markdown("### 🔬 Preprocessed Data Sample (for debugging column values)")
+    st.write("Check the values in 'Influencer', 'Platform', and 'URL' columns below to ensure they are correctly identified after preprocessing.")
+    st.dataframe(df[['Influencer', 'Platform', 'URL']].head(10)) # Display first 10 rows of relevant columns
+    st.markdown("---") # Separator
+
     if not filtered_df.empty:
         st.write("This chart shows the top 10 influencers by the number of posts in the filtered dataset.")
         top_influencers = filtered_df['Influencer'].value_counts().head(10)
@@ -523,7 +530,16 @@ with tab1:
         else:
             st.info("No 'Platform' column found or no data for platforms. This typically happens if no URLs are present in the data.")
 
-        if 'Channel' in filtered_df.columns: # 'Channel' is still mapped from 'channeltitle' or similar in default candidates
+        # Note: The 'Channel' column mapping is handled via user_outlet_col or fallbacks to 'media_name', 'channeltitle', 'source'
+        # The chart below assumes a 'Channel' column exists, which might not be directly created if user_outlet_col is used for 'Outlet'
+        # It might be better to use 'Outlet' here, as that's what's actually processed by the pipeline if the user provides it.
+        # For now, keeping 'Channel' as it was, but this is a potential point of future refinement.
+        if 'Outlet' in filtered_df.columns and not filtered_df['Outlet'].empty: # Check for 'Outlet' column as per preprocessing
+            st.write("This chart illustrates the top 10 media outlets or channels where content was published.")
+            top_outlets = filtered_df['Outlet'].value_counts().head(10)
+            fig_outlet = px.bar(top_outlets, title="Top 10 Media Outlets/Channels", labels={'value': 'Posts', 'index': 'Outlet'})
+            st.plotly_chart(fig_outlet, use_container_width=True)
+        elif 'Channel' in filtered_df.columns and not filtered_df['Channel'].empty: # Fallback if 'Channel' still exists for some reason
             st.write("This chart illustrates the top 10 channels where content was published.")
             top_channels = filtered_df['Channel'].value_counts().head(10)
             fig_chan = px.bar(top_channels, title="Top 10 Channels", labels={'value': 'Posts', 'index': 'Channel'})
@@ -663,21 +679,26 @@ with tab3:
             st.info("No valid influencer data to build the network graph.")
         else:
             # Filter graph_df based on max_influencers_graph
-            # Prioritize influencers in non-noise clusters, then top influencers by post count
+            # Prioritize influencers in non-noise clusters (cluster != -1), then top influencers by post count
             
+            # 1. Get influencers who are part of actual clusters (not noise)
             clustered_influencers = graph_df[graph_df['cluster'] != -1]['Influencer'].value_counts().index.tolist()
-            top_influencers_by_post = graph_df['Influencer'].value_counts().index.tolist()
             
-            # Combine and get unique influencers up to max_influencers_graph
+            # 2. Get all influencers sorted by post count
+            all_influencers_by_post = graph_df['Influencer'].value_counts().index.tolist()
+            
+            # Combine and get unique influencers up to max_influencers_graph, prioritizing clustered ones
             selected_influencers = []
             seen_influencers = set()
             
+            # Add clustered influencers first
             for inf in clustered_influencers:
                 if inf not in seen_influencers and len(selected_influencers) < max_influencers_graph:
                     selected_influencers.append(inf)
                     seen_influencers.add(inf)
             
-            for inf in top_influencers_by_post:
+            # Fill up with other top influencers if max_influencers_graph limit isn't reached
+            for inf in all_influencers_by_post:
                 if inf not in seen_influencers and len(selected_influencers) < max_influencers_graph:
                     selected_influencers.append(inf)
                     seen_influencers.add(inf)
@@ -686,106 +707,4 @@ with tab3:
             graph_df_subset = graph_df[graph_df['Influencer'].isin(selected_influencers)].copy()
 
             if graph_df_subset.empty:
-                st.info("No data for selected influencers to build the network graph.")
-            else:
-                G, pos, cluster_map = cached_network_graph(graph_df_subset) # Pass the subset
-
-                if not G.nodes():
-                    st.info("No nodes to display in the network graph. This might be due to filtered data or issues in graph creation.")
-                else:
-                    edge_trace = []
-                    for edge in G.edges():
-                        x0, y0 = pos[edge[0]]
-                        x1, y1 = pos[edge[1]]
-                        edge_trace.append(go.Scatter(x=[x0, x1], y=[y0, y1], mode='lines', line=dict(width=0.8, color='#888'), hoverinfo='none'))
-
-                    node_colors = [cluster_map.get(node, -2) for node in G.nodes()] # Use -2 for nodes not in any detected cluster
-                    unique_clusters = sorted(list(set(node_colors)))
-
-                    # Assign colors based on unique_clusters to ensure consistent coloring
-                    color_map = {c: i for i, c in enumerate(unique_clusters)}
-                    mapped_node_colors = [color_map[c] for c in node_colors]
-
-                    if len(unique_clusters) == 1:
-                        # If only one cluster, use a single consistent color and no colorbar
-                        marker_colorscale = px.colors.qualitative.Plotly[0] # First color from Plotly palette
-                        node_color_vals = [marker_colorscale] * len(mapped_node_colors)
-                        colorbar_dict = None
-                    else:
-                        # For multiple clusters, use a discrete color scale
-                        color_palette = px.colors.qualitative.Set3 # Base palette
-                        # Ensure enough colors for all unique clusters
-                        extended_color_palette = color_palette * ((len(unique_clusters) // len(color_palette)) + 1)
-                        
-                        marker_colors = [extended_color_palette[color_map[c]] for c in unique_clusters]
-                        
-                        node_color_vals = [extended_color_palette[color_map[c]] for c in node_colors]
-
-                        colorbar_dict = dict(
-                            title="Clusters",
-                            tickvals=[color_map[c] for c in unique_clusters], # Tick values map to the numeric indices
-                            ticktext=[str(c) for c in unique_clusters], # Tick text are the actual cluster IDs
-                            x=1.02, # Position colorbar to the right
-                            xanchor="left",
-                            len=0.7 # Length of the colorbar
-                        )
-
-                    node_trace = go.Scatter(
-                        x=[pos[node][0] for node in G.nodes()],
-                        y=[pos[node][1] for node in G.nodes()],
-                        text=[f"Influencer: {node}<br>Cluster: {cluster_map.get(node, 'N/A')}" for node in G.nodes()],
-                        mode='markers+text',
-                        textposition="top center",
-                        marker=dict(
-                            size=12,
-                            color=node_color_vals, # Use the actual colors directly
-                            # colorscale and cmin/cmax are typically for continuous scales
-                            # For discrete colors, we provide a list of colors directly.
-                            line=dict(width=2, color='darkblue'),
-                            colorbar=colorbar_dict # Apply colorbar if multiple clusters
-                        ),
-                        hoverinfo='text'
-                    )
-
-                    st.write("This interactive graph visualizes the network of influencers, with nodes representing influencers and edges indicating interactions or shared narratives. Nodes are colored by their detected cluster.")
-                    if len(selected_influencers) < len(seen_influencers):
-                         st.info(f"Displaying a subset of {len(selected_influencers)} influencers in the network graph for performance. You can adjust the 'Max Influencers for Network Graph' slider in the sidebar.")
-                    fig_net = go.Figure(data=edge_trace + [node_trace],
-                                        layout=go.Layout(
-                                            title="User Network (Click & Drag to Explore)",
-                                            showlegend=False,
-                                            hovermode='closest',
-                                            margin=dict(b=20, l=5, r=5, t=60),
-                                            xaxis=dict(showgrid=False, zeroline=False, showticklabels=False),
-                                            yaxis=dict(showgrid=False, zeroline=False, showticklabels=False),
-                                            height=600))
-                    st.plotly_chart(fig_net, use_container_width=True)
-    except Exception as e:
-        st.warning(f"⚠️ Network graph failed: {e}")
-
-    st.markdown("### ⚠️ High-Risk Influencers")
-    try:
-        if 'sim_df' in locals() and not sim_df.empty:
-            all_influencers = pd.concat([
-                sim_df[['influencer1']].rename(columns={'influencer1': 'Influencer'}),
-                sim_df[['influencer2']].rename(columns={'influencer2': 'Influencer'})
-            ])['Influencer'].dropna().astype(str)
-            influencer_counts = all_influencers.value_counts()
-            high_risk = influencer_counts[influencer_counts >= 3]
-
-            if not high_risk.empty:
-                st.write("This chart identifies influencers who appear in 3 or more coordinated messages, potentially indicating high-risk accounts.")
-                fig_hr = px.bar(
-                    high_risk,
-                    title="Influencers in ≥3 Coordinated Messages",
-                    labels={'value': 'Coordination Instances', 'index': 'Influencer'},
-                    color='value',
-                    color_continuous_scale='Reds'
-                )
-                st.plotly_chart(fig_hr, use_container_width=True)
-            else:
-                st.info("No influencers found participating in 3 or more coordinated messages.")
-        else:
-            st.info("No coordinated narratives detected to identify high-risk influencers.")
-    except Exception as e:
-        st.warning(f"Risk analysis failed: {e}")
+                st.info("
