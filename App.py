@@ -44,7 +44,8 @@ def extract_original_text(text):
     """Removes 'RT @user:' prefix to get the core message for similarity analysis."""
     if pd.isna(text) or not isinstance(text, str):
         return ""
-    cleaned = re.sub(r'^RT\s+@\w+:\s*', '', text).strip()
+    # Specifically target and remove RT @user: pattern at the beginning
+    cleaned = re.sub(r'^(RT|rt)\s+@\w+:\s*', '', text, flags=re.IGNORECASE).strip()
     return cleaned
 
 @st.cache_data(show_spinner=False)
@@ -101,7 +102,9 @@ def preprocess_data(df, user_text_col, user_influencer_col, user_timestamp_col, 
 
     df['text'] = df['text'].astype(str).replace('nan', np.nan)
     df = df.dropna(subset=['text']).reset_index(drop=True)
-    df['text'] = df[df['text'].str.strip() != ""].reset_index(drop=True)
+    
+    # Corrected line: filter the DataFrame directly, not just the 'text' column assignment
+    df = df[df['text'].str.strip() != ""].reset_index(drop=True)
 
     # --- Populate 'Influencer' column ---
     influencer_candidates_fallback = [
@@ -324,7 +327,7 @@ def build_user_interaction_graph(df):
     G = nx.Graph()
     grouped = df.groupby('cluster')
     for cluster_id, group in grouped:
-        if cluster_id == -1 or len(group) < 2: # -1 is noise, or too few members
+        if cluster_id == -1 or len(group) < 2: # -1 is noise, or too fewer members
             continue
         users = group['Influencer'].dropna().unique().tolist()
         for u1, u2 in combinations(users, 2):
