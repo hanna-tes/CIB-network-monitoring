@@ -66,7 +66,7 @@ def preprocess_data(df):
     Preprocesses the DataFrame: maps columns, creates 'text' column, cleans text,
     parses and localizes timestamps, and infers platform.
     """
-    initial_rows = len(df)
+    #initial_rows = len(df)
     #st.info(f"Initial rows in DataFrame: {initial_rows}")
 
     # 1. Remove duplicates
@@ -85,17 +85,24 @@ def preprocess_data(df):
         'Body': 'Body',
         'FullText': 'FullText',
 
-        'Influencer': 'Influencer', 'author': 'Influencer', 'username': 'Influencer',
-        'user': 'Influencer', 'authorMeta/name': 'Influencer', 'creator': 'Influencer',
-        'authorname': 'Influencer',
-        'Source': 'Influencer', # Added 'Source' as an Influencer candidate
+        # Influencer candidates
+        'Influencer': 'Influencer_Raw', # Map to a temporary name first
+        'author': 'Influencer_Raw',
+        'username': 'Influencer_Raw',
+        'user': 'Influencer_Raw',
+        'authorMeta/name': 'Influencer_Raw',
+        'creator': 'Influencer_Raw',
+        'authorname': 'Influencer_Raw',
+        'Source': 'Influencer_Raw', # User's 'Source' column
 
         'Date': 'Timestamp', 'createTimeISO': 'Timestamp', 'published_date': 'Timestamp',
         'pubDate': 'Timestamp', 'created_at': 'Timestamp', 'Alternate Date Format': 'Timestamp',
 
         'URL': 'URL', 'url': 'URL', 'webVideoUrl': 'URL', 'link': 'URL', 'post_url': 'URL',
 
-        'media_name': 'Outlet', 'channeltitle': 'Channel', 'source': 'Outlet',
+        'media_name': 'Outlet', # Map media_name to Outlet
+        'channeltitle': 'Channel',
+        'source': 'Outlet', # Another common name for media source
         'Input Name': 'InputSource',
     }
 
@@ -103,12 +110,10 @@ def preprocess_data(df):
     new_columns_dict = {}
     for col in original_cols:
         matched = False
-        # Direct match from col_map
         if col in col_map:
             new_columns_dict[col] = col_map[col]
             matched = True
         else:
-            # Normalized match from col_map
             normalized_col = col.lower().replace(" ", "").replace("_", "").replace("-", "")
             for key, target in col_map.items():
                 norm_key = key.lower().replace(" ", "").replace("_", "").replace("-", "")
@@ -140,7 +145,7 @@ def preprocess_data(df):
         for col in text_candidates_fallback:
             if col in df.columns and not df[col].empty:
                 df['text'] = df[col].astype(str).replace('nan', np.nan).fillna('')
-                st.info(f"Used '{col}' as fallback for 'text' column.")
+                #st.info(f"Used '{col}' as fallback for 'text' column.")
                 found_primary_text_col = True
                 break
 
@@ -149,7 +154,7 @@ def preprocess_data(df):
         df['text'] = ""
 
     df['text'] = df['text'].astype(str).replace('nan', np.nan)
-    initial_text_rows_before_drop = df['text'].count()
+    #initial_text_rows_before_drop = df['text'].count()
 
     df = df.dropna(subset=['text']).reset_index(drop=True)
     #st.info(f"Rows with valid text after dropping NaNs: {len(df)} (was {initial_text_rows_before_drop})")
@@ -158,32 +163,32 @@ def preprocess_data(df):
     df = df[df['text'].str.strip() != ""].reset_index(drop=True)
     #st.info(f"Rows with non-empty text: {len(df)}")
 
-    # --- Validate Required Columns (after text creation) ---
-    required_cols = ["Influencer", "Timestamp", "text"]
-    missing_cols = [col for col in required_cols if col not in df.columns]
+    # --- Populate 'Influencer' column with best available data ---
+    # Prioritize specific influencer names over general outlets
+    df['Influencer'] = "" # Initialize empty
+    
+    # Try to use 'Influencer_Raw' first if it was mapped and has values
+    if 'Influencer_Raw' in df.columns and not df['Influencer_Raw'].astype(str).str.strip().eq('').all():
+        df['Influencer'] = df['Influencer_Raw'].astype(str).replace('nan', np.nan).fillna('')
+        #st.info("Using 'Influencer_Raw' for the 'Influencer' column content.")
+    
+    # If Influencer is still empty for some rows, or if Influencer_Raw wasn't present,
+    # then fallback to 'Outlet' (media names) for those empty slots.
+    if 'Outlet' in df.columns:
+        # Fill NaN/empty Influencer values with Outlet values
+        df['Influencer'] = df['Influencer'].mask(df['Influencer'].astype(str).str.strip().eq(''), 
+                                                  df['Outlet'].astype(str).replace('nan', np.nan).fillna(''))
+        if not df['Outlet'].empty and df['Influencer'].astype(str).str.strip().eq('').any():
+            st.warning("⚠️ Filling empty 'Influencer' entries with 'Outlet' (e.g., media name).")
 
-    if missing_cols:
-        st.warning(f"⚠️ Missing required columns after processing: {missing_cols}")
-        for col in missing_cols:
-            if col == "Influencer":
-                # Check for 'Outlet' as a fallback for Influencer if no primary influencer column exists
-                if 'Outlet' in df.columns and not df['Outlet'].empty and df['Influencer'].astype(str).str.strip().eq('').all():
-                    df['Influencer'] = df['Outlet'].astype(str).replace('nan', np.nan).fillna('Unknown_User')
-                    st.warning(f"Defaulting '{col}' to 'Outlet' (which includes 'media_name').")
-                else:
-                    df['Influencer'] = "Unknown_User"
-                    st.warning(f"Defaulting '{col}' to 'Unknown_User'.")
-            elif col == "Timestamp":
-                df['Timestamp'] = pd.Timestamp.now(tz='UTC')
-                st.warning(f"Defaulting '{col}' to current UTC time.")
-            else:
-                st.error(f"🛑 Critical: Still missing required column: '{col}'. Cannot proceed.")
-                st.stop()
-
-    # Ensure Influencer column is always present and clean
-    if 'Influencer' not in df.columns:
-        df['Influencer'] = "Unknown_User"
-    df['Influencer'] = df['Influencer'].astype(str).replace('nan', np.nan).fillna('Unknown_User')
+    # Final fallback for any remaining empty Influencer entries
+    df['Influencer'] = df['Influencer'].mask(df['Influencer'].astype(str).str.strip().eq(''), 'Unknown_User')
+    if (df['Influencer'] == 'Unknown_User').any():
+        st.warning("⚠️ Some 'Influencer' entries defaulted to 'Unknown_User'.")
+    
+    # Drop the temporary Influencer_Raw column if it exists
+    if 'Influencer_Raw' in df.columns:
+        df = df.drop(columns=['Influencer_Raw'])
 
 
     # --- Timestamp Parsing ---
@@ -221,7 +226,7 @@ def preprocess_data(df):
 
     df['Timestamp'] = df['Timestamp'].apply(localize_to_utc)
 
-    valid_ts = df['Timestamp'].notna().sum()
+    #valid_ts = df['Timestamp'].notna().sum()
     #st.info(f"✅ Parsed {valid_ts} valid timestamps.")
 
     df = df.dropna(subset=["Timestamp"]).reset_index(drop=True)
@@ -386,7 +391,7 @@ def cached_network_graph(_df):
         cluster_map = {n: 0 for n in G.nodes}
         return G, pos, cluster_map
     except Exception as e:
-        #st.warning(f"Network graph module failed to import or execute. Falling back to dummy graph. Error: {e}")
+        st.warning(f"Network graph module failed to import or execute. Falling back to dummy graph. Error: {e}")
         G = nx.Graph()
         nodes = _df['Influencer'].dropna().unique()
         if len(nodes) > 1:
@@ -432,7 +437,7 @@ elif data_source_option == "Upload CSV":
                 st.error(f"Error reading CSV file '{uploaded_file.name}': {e}")
         if dfs_from_upload:
             df = pd.concat(dfs_from_upload, ignore_index=True)
-            #st.sidebar.info(f"Combined data from {len(dfs_from_upload)} file(s).")
+            st.sidebar.info(f"Combined data from {len(dfs_from_upload)} file(s).")
         else:
             st.error("No valid CSV files were uploaded or could be processed.")
             df = pd.DataFrame() # Ensure df is empty if an error occurs
