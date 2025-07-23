@@ -156,13 +156,22 @@ def preprocess_data(df):
 
     # --- Ensure 'text' column is string before stripping ---
     if 'text' in df.columns:
+        # Convert all values to string type first
         df['text'] = df['text'].astype(str)
         # Convert any 'nan' string values to actual NaN for proper dropping
         df['text'] = df['text'].replace('nan', np.nan)
-        initial_text_rows = df['text'].count()
+        initial_text_rows = df['text'].count() # Count non-NaN values
+
+        # Drop rows where 'text' is truly NaN
         df = df.dropna(subset=['text']).reset_index(drop=True)
         st.info(f"Rows with valid text after dropping NaNs: {len(df)} (was {initial_text_rows})")
 
+        # **IMPORTANT ADDITION HERE:** Convert to string *again* after dropping NaNs
+        # to ensure that if any non-string type somehow slipped through or was created,
+        # it's forced to a string before .str accessor.
+        df['text'] = df['text'].astype(str)
+
+        # Now, proceed to filter out empty strings
         df = df[df['text'].str.strip() != ""].reset_index(drop=True)
         st.info(f"Rows with non-empty text: {len(df)}")
     else:
