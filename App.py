@@ -49,23 +49,19 @@ def load_default_dataset():
     url = "https://raw.githubusercontent.com/hanna-tes/CIB-network-monitoring/refs/heads/main/TogoJULYData%20-%20Sheet1.csv"
     try:
         df = pd.read_csv(url)
-        st.sidebar.success("✅ default data loaded")
+        st.sidebar.success("✅ Default data loaded")
         return df
     except Exception as e:
         st.error(f"Failed to load default dataset: {e}")
         return pd.DataFrame()
 
 # --- Preprocessing Function ---
-
 def preprocess_data(df):
-    """
-    Preprocesses the DataFrame: maps columns, cleans text, parses timestamps.
-    """
-
+    """Preprocesses the DataFrame: maps columns, cleans text, parses timestamps."""
     # 1. Remove duplicates
     df = df.drop_duplicates().reset_index(drop=True)
 
-    # --- COLUMN MAPPING ---
+    # --- COLUMN MAPPING (MUST COME FIRST) ---
     col_map = {
         # 💬 Text Content
         'Hit Sentence': 'text',
@@ -126,7 +122,7 @@ def preprocess_data(df):
     df.columns = new_columns
     df = df.loc[:, ~df.columns.duplicated()]
 
-    # --- Validate Required Columns ---
+    # --- Validate Required Columns (after mapping) ---
     required_cols = ["Influencer", "Timestamp", "text"]
     missing_cols = [col for col in required_cols if col not in df.columns]
 
@@ -149,6 +145,7 @@ def preprocess_data(df):
                     st.stop()
                 elif col == "Timestamp":
                     df['Timestamp'] = pd.Timestamp.now()
+        # Final validation
         for col in required_cols:
             if col not in df.columns:
                 st.error(f"🛑 Still missing: '{col}' → Cannot continue.")
@@ -156,11 +153,11 @@ def preprocess_data(df):
 
     # --- Clean 'text' column ---
     df = df[df['text'].notna()]
-    df['text'] = df['text'].astype(str)
     df = df[df['text'].str.strip() != ""]
+    df['text'] = df['text'].astype(str)
     df = df.reset_index(drop=True)
 
-    # --- Timestamp Parsing ---
+    # --- Timestamp Parsing (best effort) ---
     date_formats = [
         '%b %d, %Y @ %H:%M:%S.%f',
         '%d-%b-%Y %I:%M%p',
@@ -179,8 +176,6 @@ def preprocess_data(df):
     def parse_timestamp(timestamp):
         if pd.isna(timestamp):
             return pd.NaT
-        if isinstance(timestamp, pd.Timestamp):
-            return timestamp
         for fmt in date_formats:
             try:
                 parsed = pd.to_datetime(timestamp, format=fmt, errors='coerce')
@@ -192,6 +187,7 @@ def preprocess_data(df):
 
     df['Timestamp'] = df['Timestamp'].apply(parse_timestamp)
 
+    # Convert to UTC
     def localize_to_utc(dt):
         if pd.isna(dt):
             return dt
@@ -202,15 +198,17 @@ def preprocess_data(df):
 
     df['Timestamp'] = df['Timestamp'].apply(localize_to_utc)
 
-    valid_ts = df['Timestamp'].notna().sum()
-    st.info(f"✅ Parsed {valid_ts} valid timestamps.")
+    # Warn if many timestamps failed
+    valid_count = df['Timestamp'].notna().sum()
+    st.info(f"✅ Parsed {valid_count} valid timestamps.")
 
-    # 🧱 Ensure all Timestamps are valid datetime objects
-    df = df[pd.to_datetime(df['Timestamp'], errors='coerce').notna()]
-    df['Timestamp'] = pd.to_datetime(df['Timestamp'], errors='coerce')
-    df = df.dropna(subset=["Timestamp"]).reset_index(drop=True)
+    # Drop invalid ones
+    df = df.dropna(subset=['Timestamp']).reset_index(drop=True)
+    if df.empty:
+        st.error("❌ No valid data after preprocessing.")
+        st.stop()
 
-    # --- Clean Text Further ---
+    # --- Clean Text ---
     def clean_text(text):
         if not isinstance(text, str):
             return ""
@@ -224,8 +222,6 @@ def preprocess_data(df):
         return text
 
     df['text'] = df['text'].apply(clean_text)
-
-    return df
 
     # --- Create 'Platform' from URL ---
     url_cols = ['URL', 'url', 'webVideoUrl', 'link', 'post_url']
@@ -244,12 +240,6 @@ def preprocess_data(df):
 
     # --- Extract original text (remove RT) ---
     df['original_text'] = df['text'].apply(extract_original_text)
-
-    # --- Final cleanup ---
-    df = df.dropna(subset=['Timestamp']).reset_index(drop=True)
-    if df.empty:
-        st.error("❌ No valid data after preprocessing.")
-        st.stop()
 
     return df
 
@@ -332,16 +322,10 @@ if df is None or df.empty:
 # --- Preprocess ---
 df = preprocess_data(df)
 
-# --- Sidebar Filters ---
+# --- Sidebar Filters (Only Platforms) ---
 st.sidebar.header("🔍 Filters")
 
-# 📅 Set default min/max dates for date filter
-min_date = df['Timestamp'].min().date()
-max_date = df['Timestamp'].max().date()
-
-# 🧭 Date range filter
-date_range = st.sidebar.date_input("Date Range", [min_date, max_date])
-
+# Platform filter
 available_platforms = df['Platform'].dropna().astype(str).unique().tolist()
 platforms = st.sidebar.multiselect(
     "Platforms",
@@ -349,18 +333,11 @@ platforms = st.sidebar.multiselect(
     default=available_platforms
 )
 
-# Apply filters
-try:
-    start_dt = pd.Timestamp(date_range[0])
-    end_dt = pd.Timestamp(date_range[1]) + pd.Timedelta(days=1)
-except:
-    start_dt, end_dt = min_date, max_date
-
-filtered_df = df[
-    (df['Timestamp'] >= start_dt) &
-    (df['Timestamp'] < end_dt) &
-    (df['Platform'].isin(platforms))
-].copy()
+# Apply platform filter
+if platforms:
+    filtered_df = df[df['Platform'].isin(platforms)].copy()
+else:
+    filtered_df = df.copy()
 
 # Export button
 st.sidebar.markdown("### 📄 Export Results")
@@ -399,10 +376,6 @@ with tab1:
         st.plotly_chart(fig_ht, use_container_width=True)
     else:
         st.info("No hashtags found.")
-
-    time_series = filtered_df.set_index('Timestamp').resample('D').size()
-    fig_ts = px.area(time_series, title="Daily Post Volume", labels={'value': 'Number of Posts', 'Timestamp': 'Date'})
-    st.plotly_chart(fig_ts, use_container_width=True)
 
 # ==================== TAB 2: Similarity & Coordination ====================
 with tab2:
@@ -468,7 +441,6 @@ with tab3:
             x0, y0 = pos[edge[0]]
             x1, y1 = pos[edge[1]]
             edge_trace.append(go.Scatter(x=[x0, x1], y=[y0, y1], mode='lines', line=dict(width=0.8, color='#888'), hoverinfo='none'))
-
         node_trace = go.Scatter(
             x=[pos[node][0] for node in G.nodes()],
             y=[pos[node][1] for node in G.nodes()],
@@ -484,7 +456,6 @@ with tab3:
             ),
             hoverinfo='text'
         )
-
         fig_net = go.Figure(data=edge_trace + [node_trace],
                             layout=go.Layout(
                                 title="User Network (Click & Drag to Explore)",
