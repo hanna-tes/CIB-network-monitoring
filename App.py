@@ -3,7 +3,7 @@ import pandas as pd
 import numpy as np
 import plotly.express as px
 import plotly.graph_objects as go
-import networkx as nx # Ensure networkx is imported globally
+import networkx as nx 
 from datetime import timedelta
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics.pairwise import cosine_similarity
@@ -26,7 +26,7 @@ def infer_platform_from_url(url):
     elif "facebook.com" in url or "fb.watch" in url:
         return "Facebook"
     elif "twitter.com" in url or "x.com" in url:
-        return "Twitter"
+        return "X" # Changed to X as per user's typical usage
     elif "youtube.com" in url or "youtu.be" in url:
         return "YouTube"
     elif "instagram.com" in url:
@@ -88,6 +88,7 @@ def preprocess_data(df):
         'Influencer': 'Influencer', 'author': 'Influencer', 'username': 'Influencer',
         'user': 'Influencer', 'authorMeta/name': 'Influencer', 'creator': 'Influencer',
         'authorname': 'Influencer',
+        'Source': 'Influencer', # Added 'Source' as an Influencer candidate
 
         'Date': 'Timestamp', 'createTimeISO': 'Timestamp', 'published_date': 'Timestamp',
         'pubDate': 'Timestamp', 'created_at': 'Timestamp', 'Alternate Date Format': 'Timestamp',
@@ -102,10 +103,12 @@ def preprocess_data(df):
     new_columns_dict = {}
     for col in original_cols:
         matched = False
+        # Direct match from col_map
         if col in col_map:
             new_columns_dict[col] = col_map[col]
             matched = True
         else:
+            # Normalized match from col_map
             normalized_col = col.lower().replace(" ", "").replace("_", "").replace("-", "")
             for key, target in col_map.items():
                 norm_key = key.lower().replace(" ", "").replace("_", "").replace("-", "")
@@ -117,9 +120,9 @@ def preprocess_data(df):
             new_columns_dict[col] = col
 
     df = df.rename(columns=new_columns_dict)
-    df = df.loc[:,~df.columns.duplicated()]
+    df = df.loc[:,~df.columns.duplicated()] # Remove truly duplicate column names after mapping
 
-    st.info(f"Columns after initial mapping: {df.columns.tolist()}")
+    #st.info(f"Columns after initial mapping: {df.columns.tolist()}")
 
     # --- Create 'text' column, prioritizing 'Hit Sentence' ---
     df['text'] = ''
@@ -268,9 +271,10 @@ def preprocess_data(df):
 # Vectorized similarity function
 def find_textual_similarities(df, threshold=0.85):
     """
-    Computes cosine similarity between 'original_text' entries to find similar pairs.
+    Computes cosine similarity between 'original_text' entries to find similar pairs,
+    including URLs for context.
     """
-    clean_df = df[['original_text', 'Influencer', 'Timestamp']].copy()
+    clean_df = df[['original_text', 'Influencer', 'Timestamp', 'URL']].copy() # Added 'URL' here
     clean_df['original_text'] = clean_df['original_text'].astype(str)
     clean_df = clean_df.dropna(subset=['original_text', 'Influencer', 'Timestamp'])
     clean_df = clean_df[clean_df['original_text'].str.strip() != ""]
@@ -311,9 +315,11 @@ def find_textual_similarities(df, threshold=0.85):
             'text1': row1['original_text'],
             'influencer1': row1['Influencer'],
             'time1': row1['Timestamp'],
+            'url1': row1['URL'], # Added url1
             'text2': row2['original_text'],
             'influencer2': row2['Influencer'],
             'time2': row2['Timestamp'],
+            'url2': row2['URL'], # Added url2
             'similarity': round(sim_matrix[i, j], 3),
             'shared_narrative': narrative_snippet
         })
@@ -331,13 +337,19 @@ def cached_clustering(_df):
     otherwise provides a dummy clustering.
     """
     try:
+        # Assuming modules.clustering_utils is available in the environment
         from modules.clustering_utils import cluster_texts
         if 'text' not in _df.columns:
             _df['text'] = _df['original_text']
         _df['text'] = _df['text'].astype(str)
         return cluster_texts(_df)
+    except ImportError:
+        st.warning(f"Clustering module 'modules.clustering_utils' not found. Falling back to dummy clustering.")
+        _df = _df.copy()
+        _df['cluster'] = 0 # Assign all to one cluster if module is missing
+        return _df
     except Exception as e:
-        st.warning(f"Clustering module not found or failed to import. Falling back to dummy clustering. Error: {e}")
+        st.warning(f"Clustering module failed to import or execute. Falling back to dummy clustering. Error: {e}")
         _df = _df.copy()
         _df['cluster'] = 0
         return _df
@@ -349,12 +361,32 @@ def cached_network_graph(_df):
     otherwise provides a dummy graph.
     """
     try:
+        # Assuming modules.clustering_utils is available in the environment
         from modules.clustering_utils import build_user_interaction_graph
         return build_user_interaction_graph(_df)
+    except ImportError:
+        st.warning(f"Network graph module 'modules.clustering_utils' not found. Falling back to dummy graph.")
+        G = nx.Graph()
+        nodes = _df['Influencer'].dropna().unique()
+        if len(nodes) > 1:
+            sampled_nodes = np.random.choice(nodes, min(len(nodes), 20), replace=False)
+            for i in range(len(sampled_nodes)):
+                G.add_node(sampled_nodes[i])
+                if i > 0:
+                    G.add_edge(sampled_nodes[i-1], sampled_nodes[i], weight=1)
+            for _ in range(min(10, len(sampled_nodes) * (len(sampled_nodes) - 1) // 4)):
+                u, v = np.random.choice(sampled_nodes, 2, replace=False)
+                if not G.has_edge(u, v) and u !=v:
+                    G.add_edge(u, v, weight=1)
+        else:
+            if len(nodes) == 1:
+                G.add_node(nodes[0])
+
+        pos = nx.spring_layout(G, seed=42)
+        cluster_map = {n: 0 for n in G.nodes}
+        return G, pos, cluster_map
     except Exception as e:
-        #st.warning(f"Network graph module not found or failed to import. Falling back to dummy graph. Error: {e}")
-        # Re-import networkx locally within the except block to ensure 'nx' is defined
-        import networkx as nx 
+        #st.warning(f"Network graph module failed to import or execute. Falling back to dummy graph. Error: {e}")
         G = nx.Graph()
         nodes = _df['Influencer'].dropna().unique()
         if len(nodes) > 1:
@@ -400,7 +432,7 @@ elif data_source_option == "Upload CSV":
                 st.error(f"Error reading CSV file '{uploaded_file.name}': {e}")
         if dfs_from_upload:
             df = pd.concat(dfs_from_upload, ignore_index=True)
-            st.sidebar.info(f"Combined data from {len(dfs_from_upload)} file(s).")
+            #st.sidebar.info(f"Combined data from {len(dfs_from_upload)} file(s).")
         else:
             st.error("No valid CSV files were uploaded or could be processed.")
             df = pd.DataFrame() # Ensure df is empty if an error occurs
@@ -488,9 +520,10 @@ with tab1:
         st.plotly_chart(fig_src, use_container_width=True)
 
         if 'Platform' in filtered_df.columns and not filtered_df['Platform'].empty:
-            st.write("This chart displays the top 10 social media and media platforms by post volume.")
-            top_platforms = filtered_df['Platform'].value_counts().head(10)
-            fig_platform = px.bar(top_platforms, title="Top 10 Platforms", labels={'value': 'Posts', 'index': 'Platform'})
+            st.write("This chart displays the distribution of posts across all identified social media and media platforms in the dataset.")
+            # Changed to show all platforms, not just top 10
+            all_platforms_counts = filtered_df['Platform'].value_counts()
+            fig_platform = px.bar(all_platforms_counts, title="Post Distribution by Platform", labels={'value': 'Posts', 'index': 'Platform'})
             st.plotly_chart(fig_platform, use_container_width=True)
         else:
             st.info("No 'Platform' column found or no data for platforms. This typically happens if no URLs are present in the data.")
@@ -562,8 +595,17 @@ with tab2:
             st.write("This table summarizes the top coordinated narratives, including the number of shares and involved influencers.")
             st.dataframe(narrative_summary)
             st.markdown("### 🔄 Full Similarity Pairs")
-            st.write("This table lists all detected pairs of similar texts, along with their influencers, timestamps, and similarity scores.")
-            st.dataframe(sim_df.drop(columns=['shared_narrative'], errors='ignore'))
+            st.write("This table lists all detected pairs of similar texts, along with their influencers, timestamps, similarity scores, and links to the original posts for verification.")
+            
+            # Create a display DataFrame with formatted URLs
+            display_sim_df = sim_df.drop(columns=['shared_narrative'], errors='ignore').copy()
+            # Convert URLs to clickable links
+            display_sim_df['url1'] = display_sim_df['url1'].apply(lambda x: f'<a href="{x}" target="_blank">{x}</a>' if pd.notna(x) else '')
+            display_sim_df['url2'] = display_sim_df['url2'].apply(lambda x: f'<a href="{x}" target="_blank">{x}</a>' if pd.notna(x) else '')
+            
+            # Render as HTML to make links clickable
+            st.markdown(display_sim_df.to_html(escape=False), unsafe_allow_html=True)
+
         else:
             st.info("No significant similarities found above threshold.")
 
