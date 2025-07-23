@@ -7,6 +7,8 @@ import networkx as nx
 from datetime import timedelta
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics.pairwise import cosine_similarity
+from sklearn.cluster import DBSCAN # Import DBSCAN
+from itertools import combinations # Import combinations
 import re
 from io import StringIO
 import csv
@@ -66,16 +68,10 @@ def preprocess_data(df):
     Preprocesses the DataFrame: maps columns, creates 'text' column, cleans text,
     parses and localizes timestamps, and infers platform.
     """
-    #initial_rows = len(df)
-    #st.info(f"Initial rows in DataFrame: {initial_rows}")
-
     # 1. Remove duplicates
     df = df.drop_duplicates().reset_index(drop=True)
-    #st.info(f"Rows after removing duplicates: {len(df)}")
 
     # --- COLUMN MAPPING ---
-    # Temporarily map potential influencer/text/timestamp columns to generic names
-    # Actual 'Influencer' column will be populated more carefully below.
     col_map = {
         'Hit Sentence': 'Hit Sentence',
         'Headline': 'Headline',
@@ -128,15 +124,12 @@ def preprocess_data(df):
     df = df.rename(columns=new_columns_dict)
     df = df.loc[:,~df.columns.duplicated()] # Remove truly duplicate column names after mapping
 
-    #st.info(f"Columns after initial mapping: {df.columns.tolist()}")
-
     # --- Create 'text' column, prioritizing 'Hit Sentence' ---
     df['text'] = ''
     found_primary_text_col = False
 
     if 'Hit Sentence' in df.columns:
         df['text'] = df['Hit Sentence'].astype(str).replace('nan', np.nan).fillna('')
-        #st.info("Prioritizing 'Hit Sentence' for the 'text' column content.")
         found_primary_text_col = True
     else:
         st.warning("⚠️ 'Hit Sentence' column not found. Falling back to other text candidates.")
@@ -146,7 +139,6 @@ def preprocess_data(df):
         for col in text_candidates_fallback:
             if col in df.columns and not df[col].empty:
                 df['text'] = df[col].astype(str).replace('nan', np.nan).fillna('')
-                #st.info(f"Used '{col}' as fallback for 'text' column.")
                 found_primary_text_col = True
                 break
 
@@ -155,14 +147,9 @@ def preprocess_data(df):
         df['text'] = ""
 
     df['text'] = df['text'].astype(str).replace('nan', np.nan)
-    #initial_text_rows_before_drop = df['text'].count()
-
     df = df.dropna(subset=['text']).reset_index(drop=True)
-    #st.info(f"Rows with valid text after dropping NaNs: {len(df)} (was {initial_text_rows_before_drop})")
-
     df['text'] = df['text'].astype(str)
     df = df[df['text'].str.strip() != ""].reset_index(drop=True)
-    #st.info(f"Rows with non-empty text: {len(df)}")
 
     # --- Populate 'Influencer' column with best available data ---
     df['Influencer'] = "Unknown_User" # Default to 'Unknown_User'
@@ -175,14 +162,10 @@ def preprocess_data(df):
 
     for cand_col in influencer_candidates:
         if cand_col in df.columns and not df[cand_col].astype(str).str.strip().eq('').all():
-            # Fill 'Influencer' column only where it's currently 'Unknown_User' or empty
-            # This ensures the first non-empty valid candidate is used.
             df['Influencer'] = df['Influencer'].mask(
                 (df['Influencer'] == "Unknown_User") | df['Influencer'].astype(str).str.strip().eq(''),
                 df[cand_col].astype(str).replace('nan', np.nan).fillna('Unknown_User')
             )
-            # Optional: if a strong influencer column is found, and fills most, can break early.
-            # But let's keep it iterating to ensure all empty cells are considered for other candidates.
 
     # Final fallback for any remaining 'Unknown_User' or truly empty influencer fields with 'Outlet'
     if 'Outlet' in df.columns:
@@ -190,14 +173,9 @@ def preprocess_data(df):
             (df['Influencer'] == "Unknown_User") | df['Influencer'].astype(str).str.strip().eq(''),
             df['Outlet'].astype(str).replace('nan', np.nan).fillna('Unknown_User')
         )
-        #st.warning("⚠️ Falling back to 'Outlet' (e.g., media name) for some Influencer entries.")
 
     # Drop temporary influencer candidate columns
     cols_to_drop = [col for col in influencer_candidates if col in df.columns]
-    if 'Outlet' in df.columns: # Keep Outlet if it's explicitly a distinct column user wants to see
-        # But if it's the same as Influencer for all rows, then maybe drop it.
-        # For now, let's keep it if it was original column, only drop candidates.
-        pass
     df = df.drop(columns=cols_to_drop, errors='ignore')
 
     # Ensure Influencer column is always present and clean (already handled above but final check)
@@ -238,12 +216,7 @@ def preprocess_data(df):
         else: return dt.tz_convert('UTC')
 
     df['Timestamp'] = df['Timestamp'].apply(localize_to_utc)
-
-    #valid_ts = df['Timestamp'].notna().sum()
-    #st.info(f"✅ Parsed {valid_ts} valid timestamps.")
-
     df = df.dropna(subset=["Timestamp"]).reset_index(drop=True)
-    #st.info(f"Rows after dropping invalid timestamps: {len(df)}")
 
     # --- Create 'Platform' from URL ---
     url_cols = ['URL', 'url', 'webVideoUrl', 'link', 'post_url']
@@ -274,7 +247,6 @@ def preprocess_data(df):
         return text
 
     df['text'] = df['text'].apply(clean_text_final)
-    #st.info(f"Rows after final text cleaning: {len(df)}")
 
     # --- Extract original text (for similarity, removes RT specifically) ---
     df['original_text'] = df['text'].apply(extract_original_text)
@@ -292,7 +264,7 @@ def find_textual_similarities(df, threshold=0.85):
     Computes cosine similarity between 'original_text' entries to find similar pairs,
     including URLs for context.
     """
-    clean_df = df[['original_text', 'Influencer', 'Timestamp', 'URL']].copy() # Added 'URL' here
+    clean_df = df[['original_text', 'Influencer', 'Timestamp', 'URL']].copy()
     clean_df['original_text'] = clean_df['original_text'].astype(str)
     clean_df = clean_df.dropna(subset=['original_text', 'Influencer', 'Timestamp'])
     clean_df = clean_df[clean_df['original_text'].str.strip() != ""]
@@ -333,15 +305,78 @@ def find_textual_similarities(df, threshold=0.85):
             'text1': row1['original_text'],
             'influencer1': row1['Influencer'],
             'time1': row1['Timestamp'],
-            'url1': row1['URL'], # Added url1
+            'url1': row1['URL'],
             'text2': row2['original_text'],
             'influencer2': row2['Influencer'],
             'time2': row2['Timestamp'],
-            'url2': row2['URL'], # Added url2
+            'url2': row2['URL'],
             'similarity': round(sim_matrix[i, j], 3),
             'shared_narrative': narrative_snippet
         })
     return pd.DataFrame(similar_pairs)
+
+# --- Clustering and Graph Building Functions (from user's modules.clustering_utils) ---
+def cluster_texts(df, eps=0.3, min_samples=2):
+    # Ensure 'original_text' exists before vectorizing
+    if 'original_text' not in df.columns:
+        df['original_text'] = df['text'].apply(extract_original_text) # Fallback in case it's not present
+
+    texts_to_cluster = df['original_text'].astype(str).tolist()
+    
+    if not texts_to_cluster or all(text.strip() == "" for text in texts_to_cluster):
+        st.warning("No valid text data for clustering. Assigning all to cluster 0.")
+        df_copy = df.copy()
+        df_copy['cluster'] = 0
+        return df_copy
+
+    vectorizer = TfidfVectorizer(stop_words='english', max_features=5000)
+    try:
+        tfidf_matrix = vectorizer.fit_transform(texts_to_cluster)
+    except ValueError as e:
+        st.warning(f"Could not create TF-IDF matrix for clustering: {e}. Assigning all to cluster 0.")
+        df_copy = df.copy()
+        df_copy['cluster'] = 0
+        return df_copy
+        
+    clustering = DBSCAN(metric='cosine', eps=eps, min_samples=min_samples).fit(tfidf_matrix)
+    df_copy = df.copy()
+    df_copy['cluster'] = clustering.labels_
+    return df_copy
+
+def build_user_interaction_graph(df):
+    G = nx.Graph()
+    # Simple: connect users who share same narrative (via high similarity or same cluster)
+    # Ensure 'Influencer' is used as the node name, not 'Source' as in the original module
+    grouped = df.groupby('cluster')
+    for cluster_id, group in grouped:
+        if cluster_id == -1 or len(group) < 2: # -1 is noise, or too few members
+            continue
+        users = group['Influencer'].dropna().unique().tolist() # Use 'Influencer'
+        for u1, u2 in combinations(users, 2):
+            if G.has_edge(u1, u2):
+                G[u1][u2]['weight'] += 1
+            else:
+                G.add_edge(u1, u2, weight=1)
+    
+    # Create position for all nodes, including isolated ones if needed
+    all_influencers = df['Influencer'].dropna().unique().tolist()
+    for inf in all_influencers:
+        if inf not in G.nodes():
+            G.add_node(inf)
+
+    # Use a layout that handles disconnected components well
+    pos = nx.spring_layout(G, seed=42, k=0.1, iterations=50) # Adjust k and iterations for better spread
+
+    # Create a cluster map for coloring nodes
+    # If a user is in multiple clusters (e.g. if the original_text has multiple posts), pick the first one
+    cluster_map = df.set_index('Influencer')['cluster'].to_dict()
+    # Handle cases where an influencer might be in multiple clusters in the raw data,
+    # or not present in 'cluster' column if filtered out by text processing.
+    # Ensure every node in G has a cluster ID. Default to 0 if not found.
+    final_cluster_map = {node: cluster_map.get(node, 0) for node in G.nodes()}
+
+    return G, pos, final_cluster_map
+
 
 # --- Cached Expensive Functions ---
 @st.cache_data(show_spinner="🔍 Computing textual similarities...")
@@ -351,80 +386,18 @@ def cached_similarity_analysis(_df, threshold=0.85):
 @st.cache_data(show_spinner="🧩 Clustering texts...")
 def cached_clustering(_df):
     """
-    Performs text clustering if the 'modules.clustering_utils' is available,
-    otherwise provides a dummy clustering.
+    Performs text clustering using the integrated DBSCAN clustering function.
     """
-    try:
-        # Assuming modules.clustering_utils is available in the environment
-        from modules.clustering_utils import cluster_texts
-        if 'text' not in _df.columns:
-            _df['text'] = _df['original_text']
-        _df['text'] = _df['text'].astype(str)
-        # Attempt to cluster
-        return cluster_texts(_df)
-    except ImportError:
-        st.warning(f"Clustering module 'modules.clustering_utils' not found. Falling back to dummy clustering (all to Cluster 0).")
-        _df = _df.copy()
-        _df['cluster'] = 0 # Assign all to one cluster if module is missing
-        return _df
-    except Exception as e:
-        st.warning(f"Clustering module failed to import or execute. Falling back to dummy clustering (all to Cluster 0). Error: {e}")
-        _df = _df.copy()
-        _df['cluster'] = 0
-        return _df
+    # Directly call the defined cluster_texts function
+    return cluster_texts(_df)
 
 @st.cache_data(show_spinner="🕸️ Building network graph...")
 def cached_network_graph(_df):
     """
-    Builds a user interaction network graph if 'modules.clustering_utils' is available,
-    otherwise provides a dummy graph.
+    Builds a user interaction network graph using the integrated function.
     """
-    try:
-        # Assuming modules.clustering_utils is available in the environment
-        from modules.clustering_utils import build_user_interaction_graph
-        return build_user_interaction_graph(_df)
-    except ImportError:
-        st.warning(f"Network graph module 'modules.clustering_utils' not found. Falling back to dummy graph.")
-        G = nx.Graph()
-        nodes = _df['Influencer'].dropna().unique()
-        if len(nodes) > 1:
-            sampled_nodes = np.random.choice(nodes, min(len(nodes), 20), replace=False)
-            for i in range(len(sampled_nodes)):
-                G.add_node(sampled_nodes[i])
-                if i > 0:
-                    G.add_edge(sampled_nodes[i-1], sampled_nodes[i], weight=1)
-            for _ in range(min(10, len(sampled_nodes) * (len(sampled_nodes) - 1) // 4)):
-                u, v = np.random.choice(sampled_nodes, 2, replace=False)
-                if not G.has_edge(u, v) and u !=v:
-                    G.add_edge(u, v, weight=1)
-        else:
-            if len(nodes) == 1:
-                G.add_node(nodes[0])
-
-        pos = nx.spring_layout(G, seed=42)
-        cluster_map = {n: 0 for n in G.nodes} # Assign all to cluster 0 in dummy graph
-        return G, pos, cluster_map
-    except Exception as e:
-        st.warning(f"Network graph module failed to import or execute. Falling back to dummy graph. Error: {e}")
-        G = nx.Graph()
-        nodes = _df['Influencer'].dropna().unique()
-        if len(nodes) > 1:
-            sampled_nodes = np.random.choice(nodes, min(len(nodes), 20), replace=False)
-            for i in range(len(sampled_nodes)):
-                G.add_node(sampled_nodes[i])
-                if i > 0:
-                    G.add_edge(sampled_nodes[i-1], sampled_nodes[i], weight=1)
-            for _ in range(min(10, len(sampled_nodes) * (len(sampled_nodes) - 1) // 4)):
-                u, v = np.random.choice(sampled_nodes, 2, replace=False)
-                if not G.has_edge(u, v) and u !=v:
-                    G.add_edge(u, v, weight=1)
-        else:
-            if len(nodes) == 1:
-                G.add_node(nodes[0])
-
-        pos = nx.spring_layout(G, seed=42)
-        cluster_map = {n: 0 for n in G.nodes} # Assign all to cluster 0 in dummy graph
-        return G, pos, cluster_map
+    # Directly call the defined build_user_interaction_graph function
+    return build_user_interaction_graph(_df)
 
 # --- Data Source Selection ---
 st.sidebar.header("📥 Data Source")
@@ -641,12 +614,19 @@ with tab3:
             clustered_df = pd.DataFrame()
         else:
             clustered_df = cached_clustering(df_for_clustering)
-            if 'cluster' not in clustered_df.columns:
-                st.warning("⚠️ Clustering did not return 'cluster' column. Displaying unclustered data.")
-                clustered_df['cluster'] = "N/A"
+            # No need for the warning if 'cluster' column is missing, as the functions themselves handle fallbacks
+            # if 'cluster' not in clustered_df.columns:
+            #     st.warning("⚠️ Clustering did not return 'cluster' column. Displaying unclustered data.")
+            #     clustered_df['cluster'] = "N/A"
 
         if not clustered_df.empty:
             cluster_counts = clustered_df['cluster'].value_counts()
+            # Exclude noise cluster (-1) from counts for visualization
+            if -1 in cluster_counts.index:
+                noise_count = cluster_counts[-1]
+                cluster_counts = cluster_counts.drop(index=-1)
+                st.info(f"💡 {noise_count} posts were identified as noise (Cluster -1) and are excluded from cluster visualization but still included in the network graph if they are influencers.")
+
             if not cluster_counts.empty:
                 st.markdown("### 🤖 Detected Coordination Clusters")
                 st.write("This chart visualizes the sizes of detected clusters, where each cluster represents a group of coordinated texts.")
@@ -661,7 +641,7 @@ with tab3:
                 st.write("This table shows the influencers, their posts, timestamps, and their assigned cluster IDs.")
                 st.dataframe(clustered_df[['Influencer', 'text', 'Timestamp', 'cluster']])
             else:
-                st.info("No clusters detected or no data available for clustering.")
+                st.info("No significant clusters detected (all posts might be noise or too few posts for clustering).")
         else:
             st.info("No data available for clustering.")
 
@@ -686,11 +666,33 @@ with tab3:
                     x1, y1 = pos[edge[1]]
                     edge_trace.append(go.Scatter(x=[x0, x1], y=[y0, y1], mode='lines', line=dict(width=0.8, color='#888'), hoverinfo='none'))
 
-                node_colors = [cluster_map.get(node, 0) for node in G.nodes()]
-                if len(set(node_colors)) > 1:
-                    marker_colorscale = 'Set3'
+                node_colors = [cluster_map.get(node, -2) for node in G.nodes()] # Use -2 for nodes not in any detected cluster
+                unique_clusters = sorted(list(set(node_colors)))
+
+                # Assign colors based on unique_clusters to ensure consistent coloring
+                # and handle the '-1' noise cluster if present
+                color_map = {c: i for i, c in enumerate(unique_clusters)}
+                mapped_node_colors = [color_map[c] for c in node_colors]
+
+                # If only one cluster (0 or -1), use a single color, otherwise use colorscale
+                if len(unique_clusters) == 1:
+                    marker_colorscale = px.colors.qualitative.Plotly # Or any single color scale
+                    node_color_vals = [mapped_node_colors[0]] * len(mapped_node_colors)
+                    colorbar_dict = None
                 else:
-                    marker_colorscale = 'Blues'
+                    # Filter out -1 for discrete color mapping if it's not desired in legend/colorbar
+                    display_clusters = [c for c in unique_clusters if c != -1]
+                    color_palette = px.colors.qualitative.Set3 * 5 # Extend palette if many clusters
+                    marker_colors = [color_palette[color_map[c]] for c in unique_clusters]
+                    
+                    node_color_vals = mapped_node_colors # Use mapped indices for color
+                    
+                    # Custom colorbar/legend if needed, for simplicity let's rely on Plotly's default discrete color handling
+                    colorbar_dict = dict(
+                        title="Clusters",
+                        tickvals=list(color_map.values()),
+                        ticktext=[str(c) for c in unique_clusters]
+                    )
 
                 node_trace = go.Scatter(
                     x=[pos[node][0] for node in G.nodes()],
@@ -700,10 +702,12 @@ with tab3:
                     textposition="top center",
                     marker=dict(
                         size=12,
-                        color=node_colors,
-                        colorscale=marker_colorscale,
-                        colorbar=dict(title="Clusters") if len(set(node_colors)) > 1 else None,
-                        line=dict(width=2, color='darkblue')
+                        color=node_color_vals,
+                        colorscale='Plotly' if len(unique_clusters) > 1 else None, # Use Plotly default for discrete coloring
+                        cmin=0, cmax=len(unique_clusters)-1, # Define color range for discrete values
+                        line=dict(width=2, color='darkblue'),
+                        colorbar=colorbar_dict if len(unique_clusters) > 1 else None,
+                        colors=marker_colors if len(unique_clusters) > 1 else marker_colorscale # This line might be redundant with color=node_color_vals and colorscale
                     ),
                     hoverinfo='text'
                 )
