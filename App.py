@@ -101,8 +101,7 @@ def preprocess_data(df, user_text_col, user_influencer_col, user_timestamp_col, 
 
     df['text'] = df['text'].astype(str).replace('nan', np.nan)
     df = df.dropna(subset=['text']).reset_index(drop=True)
-    df['text'] = df['text'].astype(str)
-    df = df[df['text'].str.strip() != ""].reset_index(drop=True)
+    df['text'] = df[df['text'].str.strip() != ""].reset_index(drop=True)
 
     # --- Populate 'Influencer' column ---
     influencer_candidates_fallback = [
@@ -540,7 +539,7 @@ tab1, tab2, tab3 = st.tabs(["📊 Overview", "🔍 Analysis", "🌐 Network & Ri
 with tab1:
     st.subheader("📌 Summary Statistics")
 
-    st.markdown("### 🔬 Preprocessed Data Sample)")
+    st.markdown("### 🔬 Preprocessed Data Sample")
     st.write("Check the values in 'Influencer', 'Platform', and 'URL' columns below to ensure they are correctly identified after preprocessing.")
     st.dataframe(df[['Influencer', 'Platform', 'URL']].head(10))
     st.markdown("---")
@@ -864,8 +863,12 @@ with tab3:
                     )
 
                     st.write("This interactive graph visualizes the network of influencers, with nodes representing influencers and edges indicating interactions or shared narratives. Nodes are colored by their detected cluster.")
-                    if len(selected_influencers) < len(seen_influencers):
-                         st.info(f"Displaying a subset of {len(G.nodes())} influencers in the network graph based on your filters and the 'Max Influencers for Network Graph' setting. Adjust the slider to include more influencers.")
+                    
+                    # Corrected logic for the info message
+                    total_influencers_before_limit = graph_df_filtered_for_top_clusters['Influencer'].nunique()
+                    if len(G.nodes()) < total_influencers_before_limit:
+                         st.info(f"Displaying a subset of {len(G.nodes())} influencers out of {total_influencers_before_limit} total based on your filters and the 'Max Influencers for Network Graph' setting. Adjust the slider to include more influencers.")
+
                     fig_net = go.Figure(data=edge_trace + [node_trace],
                                         layout=go.Layout(
                                             title="User Network (Click & Drag to Explore)",
