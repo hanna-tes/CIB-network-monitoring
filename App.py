@@ -205,7 +205,9 @@ def preprocess_data(df):
     valid_ts = df['Timestamp'].notna().sum()
     st.info(f"✅ Parsed {valid_ts} valid timestamps.")
 
-    # Optional: Drop rows with invalid timestamps
+    # 🧱 Ensure all Timestamps are valid datetime objects
+    df = df[pd.to_datetime(df['Timestamp'], errors='coerce').notna()]
+    df['Timestamp'] = pd.to_datetime(df['Timestamp'], errors='coerce')
     df = df.dropna(subset=["Timestamp"]).reset_index(drop=True)
 
     # --- Clean Text Further ---
@@ -332,11 +334,6 @@ df = preprocess_data(df)
 
 # --- Sidebar Filters ---
 st.sidebar.header("🔍 Filters")
-
-# 🧱 Ensure all Timestamps are valid datetime objects
-df = df[pd.to_datetime(df['Timestamp'], errors='coerce').notna()]
-df['Timestamp'] = pd.to_datetime(df['Timestamp'], errors='coerce')
-df = df.dropna(subset=["Timestamp"]).reset_index(drop=True)
 
 # 📅 Set default min/max dates for date filter
 min_date = df['Timestamp'].min().date()
