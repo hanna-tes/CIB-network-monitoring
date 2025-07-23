@@ -3,7 +3,7 @@ import pandas as pd
 import numpy as np
 import plotly.express as px
 import plotly.graph_objects as go
-import networkx as nx
+import networkx as nx # Ensure networkx is imported globally
 from datetime import timedelta
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics.pairwise import cosine_similarity
@@ -67,11 +67,11 @@ def preprocess_data(df):
     parses and localizes timestamps, and infers platform.
     """
     initial_rows = len(df)
-    #st.info(f"Initial rows in DataFrame: {initial_rows}")
+    st.info(f"Initial rows in DataFrame: {initial_rows}")
 
     # 1. Remove duplicates
     df = df.drop_duplicates().reset_index(drop=True)
-    #st.info(f"Rows after removing duplicates: {len(df)}")
+    st.info(f"Rows after removing duplicates: {len(df)}")
 
     # --- COLUMN MAPPING ---
     col_map = {
@@ -119,7 +119,7 @@ def preprocess_data(df):
     df = df.rename(columns=new_columns_dict)
     df = df.loc[:,~df.columns.duplicated()]
 
-    #st.info(f"Columns after initial mapping: {df.columns.tolist()}")
+    st.info(f"Columns after initial mapping: {df.columns.tolist()}")
 
     # --- Create 'text' column, prioritizing 'Hit Sentence' ---
     df['text'] = ''
@@ -127,7 +127,7 @@ def preprocess_data(df):
 
     if 'Hit Sentence' in df.columns:
         df['text'] = df['Hit Sentence'].astype(str).replace('nan', np.nan).fillna('')
-        #st.info("Prioritizing 'Hit Sentence' for the 'text' column content.")
+        st.info("Prioritizing 'Hit Sentence' for the 'text' column content.")
         found_primary_text_col = True
     else:
         st.warning("⚠️ 'Hit Sentence' column not found. Falling back to other text candidates.")
@@ -149,11 +149,11 @@ def preprocess_data(df):
     initial_text_rows_before_drop = df['text'].count()
 
     df = df.dropna(subset=['text']).reset_index(drop=True)
-    #st.info(f"Rows with valid text after dropping NaNs: {len(df)} (was {initial_text_rows_before_drop})")
+    st.info(f"Rows with valid text after dropping NaNs: {len(df)} (was {initial_text_rows_before_drop})")
 
     df['text'] = df['text'].astype(str)
     df = df[df['text'].str.strip() != ""].reset_index(drop=True)
-    #st.info(f"Rows with non-empty text: {len(df)}")
+    st.info(f"Rows with non-empty text: {len(df)}")
 
     # --- Validate Required Columns (after text creation) ---
     required_cols = ["Influencer", "Timestamp", "text"]
@@ -208,10 +208,10 @@ def preprocess_data(df):
     df['Timestamp'] = df['Timestamp'].apply(localize_to_utc)
 
     valid_ts = df['Timestamp'].notna().sum()
-    #st.info(f"✅ Parsed {valid_ts} valid timestamps.")
+    st.info(f"✅ Parsed {valid_ts} valid timestamps.")
 
     df = df.dropna(subset=["Timestamp"]).reset_index(drop=True)
-    #st.info(f"Rows after dropping invalid timestamps: {len(df)}")
+    st.info(f"Rows after dropping invalid timestamps: {len(df)}")
 
     # --- Create 'Platform' from URL ---
     url_cols = ['URL', 'url', 'webVideoUrl', 'link', 'post_url']
@@ -226,7 +226,7 @@ def preprocess_data(df):
         df['Platform'] = df['URL'].apply(infer_platform_from_url)
     else:
         df['Platform'] = "Unknown"
-        #st.sidebar.warning("⚠️ No URL column found → all platforms marked as 'Unknown'")
+        st.sidebar.warning("⚠️ No URL column found → all platforms marked as 'Unknown'")
 
     # --- Clean Text Further (after 'text' column is finalized) ---
     def clean_text_final(text):
@@ -242,7 +242,7 @@ def preprocess_data(df):
         return text
 
     df['text'] = df['text'].apply(clean_text_final)
-    #st.info(f"Rows after final text cleaning: {len(df)}")
+    st.info(f"Rows after final text cleaning: {len(df)}")
 
     # --- Extract original text (for similarity, removes RT specifically) ---
     df['original_text'] = df['text'].apply(extract_original_text)
@@ -342,6 +342,8 @@ def cached_network_graph(_df):
         return build_user_interaction_graph(_df)
     except Exception as e:
         st.warning(f"Network graph module not found or failed to import. Falling back to dummy graph. Error: {e}")
+        # Re-import networkx locally within the except block to ensure 'nx' is defined
+        import networkx as nx 
         G = nx.Graph()
         nodes = _df['Influencer'].dropna().unique()
         if len(nodes) > 1:
@@ -379,6 +381,8 @@ elif data_source_option == "Upload CSV":
         try:
             df = pd.read_csv(uploaded_file)
             st.sidebar.success("✅ CSV uploaded successfully!")
+            # Clear default data success message if new data is uploaded
+            st.session_state['default_data_loaded'] = False
         except Exception as e:
             st.error(f"Error reading CSV file: {e}")
             df = pd.DataFrame() # Ensure df is empty if an error occurs
@@ -458,11 +462,13 @@ tab1, tab2, tab3 = st.tabs(["📊 Overview", "🔍 Analysis", "🌐 Network & Ri
 with tab1:
     st.subheader("📌 Summary Statistics")
     if not filtered_df.empty:
+        st.write("This chart shows the top 10 influencers by the number of posts in the filtered dataset.")
         top_influencers = filtered_df['Influencer'].value_counts().head(10)
         fig_src = px.bar(top_influencers, title="Top 10 Influencers", labels={'value': 'Posts', 'index': 'Influencer'})
         st.plotly_chart(fig_src, use_container_width=True)
 
         if 'Platform' in filtered_df.columns and not filtered_df['Platform'].empty:
+            st.write("This chart displays the top 10 social media and media platforms by post volume.")
             top_platforms = filtered_df['Platform'].value_counts().head(10)
             fig_platform = px.bar(top_platforms, title="Top 10 Platforms", labels={'value': 'Posts', 'index': 'Platform'})
             st.plotly_chart(fig_platform, use_container_width=True)
@@ -470,11 +476,13 @@ with tab1:
             st.info("No 'Platform' column found or no data for platforms. This typically happens if no URLs are present in the data.")
 
         if 'Channel' in filtered_df.columns:
+            st.write("This chart illustrates the top 10 channels where content was published.")
             top_channels = filtered_df['Channel'].value_counts().head(10)
             fig_chan = px.bar(top_channels, title="Top 10 Channels", labels={'value': 'Posts', 'index': 'Channel'})
             st.plotly_chart(fig_chan, use_container_width=True)
 
         if 'text' in filtered_df.columns and not filtered_df['text'].empty:
+            st.write("This chart highlights the top 10 most frequently used hashtags in the filtered posts.")
             filtered_df['hashtags'] = filtered_df['text'].astype(str).str.findall(r'#\w+').apply(lambda x: [tag.lower() for tag in x])
 
             all_hashtags = [tag for tags_list in filtered_df['hashtags'] if isinstance(tags_list, list) for tag in tags_list if tags_list]
@@ -488,6 +496,7 @@ with tab1:
         else:
             st.info("No 'text' column found or it's empty to extract hashtags.")
 
+        st.write("This area chart visualizes the daily volume of posts over the selected date range.")
         time_series = filtered_df.set_index('Timestamp').resample('D').size()
         fig_ts = px.area(time_series, title="Daily Post Volume", labels={'value': 'Number of Posts', 'Timestamp': 'Date'})
         st.plotly_chart(fig_ts, use_container_width=True)
@@ -517,6 +526,7 @@ with tab2:
             ).sort_values(by='share_count', ascending=False).reset_index()
 
             st.markdown("### 🔝 Top Coordinated Narratives")
+            st.write("This bar chart shows the top 10 narrative snippets that are shared across multiple posts, indicating potential coordination.")
             fig_nar = px.bar(
                 narrative_summary.head(10),
                 x='share_count',
@@ -529,8 +539,10 @@ with tab2:
             )
             st.plotly_chart(fig_nar, use_container_width=True)
 
+            st.write("This table summarizes the top coordinated narratives, including the number of shares and involved influencers.")
             st.dataframe(narrative_summary)
             st.markdown("### 🔄 Full Similarity Pairs")
+            st.write("This table lists all detected pairs of similar texts, along with their influencers, timestamps, and similarity scores.")
             st.dataframe(sim_df.drop(columns=['shared_narrative'], errors='ignore'))
         else:
             st.info("No significant similarities found above threshold.")
@@ -556,6 +568,7 @@ with tab3:
             cluster_counts = clustered_df['cluster'].value_counts()
             if not cluster_counts.empty:
                 st.markdown("### 🤖 Detected Coordination Clusters")
+                st.write("This chart visualizes the sizes of detected clusters, where each cluster represents a group of coordinated texts.")
                 fig_clust = px.bar(
                     cluster_counts,
                     title="Cluster Sizes",
@@ -564,6 +577,7 @@ with tab3:
                     color_discrete_sequence=px.colors.qualitative.Set3
                 )
                 st.plotly_chart(fig_clust, use_container_width=True)
+                st.write("This table shows the influencers, their posts, timestamps, and their assigned cluster IDs.")
                 st.dataframe(clustered_df[['Influencer', 'text', 'Timestamp', 'cluster']])
             else:
                 st.info("No clusters detected or no data available for clustering.")
@@ -613,6 +627,7 @@ with tab3:
                     hoverinfo='text'
                 )
 
+                st.write("This interactive graph visualizes the network of influencers, with nodes representing influencers and edges indicating interactions or shared narratives. Nodes are colored by their detected cluster.")
                 fig_net = go.Figure(data=edge_trace + [node_trace],
                                     layout=go.Layout(
                                         title="User Network (Click & Drag to Explore)",
@@ -637,6 +652,7 @@ with tab3:
             high_risk = influencer_counts[influencer_counts >= 3]
 
             if not high_risk.empty:
+                st.write("This chart identifies influencers who appear in 3 or more coordinated messages, potentially indicating high-risk accounts.")
                 fig_hr = px.bar(
                     high_risk,
                     title="Influencers in ≥3 Coordinated Messages",
