@@ -74,6 +74,8 @@ def preprocess_data(df):
     #st.info(f"Rows after removing duplicates: {len(df)}")
 
     # --- COLUMN MAPPING ---
+    # Temporarily map potential influencer/text/timestamp columns to generic names
+    # Actual 'Influencer' column will be populated more carefully below.
     col_map = {
         'Hit Sentence': 'Hit Sentence',
         'Headline': 'Headline',
@@ -85,15 +87,14 @@ def preprocess_data(df):
         'Body': 'Body',
         'FullText': 'FullText',
 
-        # Influencer candidates
-        'Influencer': 'Influencer_Raw', # Map to a temporary name first
-        'author': 'Influencer_Raw',
-        'username': 'Influencer_Raw',
-        'user': 'Influencer_Raw',
-        'authorMeta/name': 'Influencer_Raw',
-        'creator': 'Influencer_Raw',
-        'authorname': 'Influencer_Raw',
-        'Source': 'Influencer_Raw', # User's 'Source' column
+        'Influencer': 'Influencer_Candidate_1',
+        'author': 'Influencer_Candidate_2',
+        'username': 'Influencer_Candidate_3',
+        'user': 'Influencer_Candidate_4',
+        'authorMeta/name': 'Influencer_Candidate_5',
+        'creator': 'Influencer_Candidate_6',
+        'authorname': 'Influencer_Candidate_7',
+        'Source': 'Influencer_Candidate_8', # User's 'Source' column
 
         'Date': 'Timestamp', 'createTimeISO': 'Timestamp', 'published_date': 'Timestamp',
         'pubDate': 'Timestamp', 'created_at': 'Timestamp', 'Alternate Date Format': 'Timestamp',
@@ -164,31 +165,43 @@ def preprocess_data(df):
     #st.info(f"Rows with non-empty text: {len(df)}")
 
     # --- Populate 'Influencer' column with best available data ---
-    # Prioritize specific influencer names over general outlets
-    df['Influencer'] = "" # Initialize empty
-    
-    # Try to use 'Influencer_Raw' first if it was mapped and has values
-    if 'Influencer_Raw' in df.columns and not df['Influencer_Raw'].astype(str).str.strip().eq('').all():
-        df['Influencer'] = df['Influencer_Raw'].astype(str).replace('nan', np.nan).fillna('')
-        #st.info("Using 'Influencer_Raw' for the 'Influencer' column content.")
-    
-    # If Influencer is still empty for some rows, or if Influencer_Raw wasn't present,
-    # then fallback to 'Outlet' (media names) for those empty slots.
-    if 'Outlet' in df.columns:
-        # Fill NaN/empty Influencer values with Outlet values
-        df['Influencer'] = df['Influencer'].mask(df['Influencer'].astype(str).str.strip().eq(''), 
-                                                  df['Outlet'].astype(str).replace('nan', np.nan).fillna(''))
-        if not df['Outlet'].empty and df['Influencer'].astype(str).str.strip().eq('').any():
-            st.warning("⚠️ Filling empty 'Influencer' entries with 'Outlet' (e.g., media name).")
+    df['Influencer'] = "Unknown_User" # Default to 'Unknown_User'
 
-    # Final fallback for any remaining empty Influencer entries
-    df['Influencer'] = df['Influencer'].mask(df['Influencer'].astype(str).str.strip().eq(''), 'Unknown_User')
-    if (df['Influencer'] == 'Unknown_User').any():
-        st.warning("⚠️ Some 'Influencer' entries defaulted to 'Unknown_User'.")
-    
-    # Drop the temporary Influencer_Raw column if it exists
-    if 'Influencer_Raw' in df.columns:
-        df = df.drop(columns=['Influencer_Raw'])
+    influencer_candidates = [
+        'Influencer_Candidate_1', 'Influencer_Candidate_2', 'Influencer_Candidate_3',
+        'Influencer_Candidate_4', 'Influencer_Candidate_5', 'Influencer_Candidate_6',
+        'Influencer_Candidate_7', 'Influencer_Candidate_8'
+    ]
+
+    for cand_col in influencer_candidates:
+        if cand_col in df.columns and not df[cand_col].astype(str).str.strip().eq('').all():
+            # Fill 'Influencer' column only where it's currently 'Unknown_User' or empty
+            # This ensures the first non-empty valid candidate is used.
+            df['Influencer'] = df['Influencer'].mask(
+                (df['Influencer'] == "Unknown_User") | df['Influencer'].astype(str).str.strip().eq(''),
+                df[cand_col].astype(str).replace('nan', np.nan).fillna('Unknown_User')
+            )
+            # Optional: if a strong influencer column is found, and fills most, can break early.
+            # But let's keep it iterating to ensure all empty cells are considered for other candidates.
+
+    # Final fallback for any remaining 'Unknown_User' or truly empty influencer fields with 'Outlet'
+    if 'Outlet' in df.columns:
+        df['Influencer'] = df['Influencer'].mask(
+            (df['Influencer'] == "Unknown_User") | df['Influencer'].astype(str).str.strip().eq(''),
+            df['Outlet'].astype(str).replace('nan', np.nan).fillna('Unknown_User')
+        )
+        #st.warning("⚠️ Falling back to 'Outlet' (e.g., media name) for some Influencer entries.")
+
+    # Drop temporary influencer candidate columns
+    cols_to_drop = [col for col in influencer_candidates if col in df.columns]
+    if 'Outlet' in df.columns: # Keep Outlet if it's explicitly a distinct column user wants to see
+        # But if it's the same as Influencer for all rows, then maybe drop it.
+        # For now, let's keep it if it was original column, only drop candidates.
+        pass
+    df = df.drop(columns=cols_to_drop, errors='ignore')
+
+    # Ensure Influencer column is always present and clean (already handled above but final check)
+    df['Influencer'] = df['Influencer'].astype(str).replace('nan', np.nan).fillna('Unknown_User')
 
 
     # --- Timestamp Parsing ---
