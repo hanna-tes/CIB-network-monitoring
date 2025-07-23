@@ -3,12 +3,12 @@ import pandas as pd
 import numpy as np
 import plotly.express as px
 import plotly.graph_objects as go
-import networkx as nx 
+import networkx as nx
 from datetime import timedelta
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics.pairwise import cosine_similarity
-from sklearn.cluster import DBSCAN # Import DBSCAN
-from itertools import combinations # Import combinations
+from sklearn.cluster import DBSCAN
+from itertools import combinations
 import re
 from io import StringIO
 import csv
@@ -28,7 +28,7 @@ def infer_platform_from_url(url):
     elif "facebook.com" in url or "fb.watch" in url:
         return "Facebook"
     elif "twitter.com" in url or "x.com" in url:
-        return "X" # Changed to X as per user's typical usage
+        return "X"
     elif "youtube.com" in url or "youtu.be" in url:
         return "YouTube"
     elif "instagram.com" in url:
@@ -72,87 +72,70 @@ def preprocess_data(df, user_text_col, user_influencer_col, user_timestamp_col, 
     # 1. Remove duplicates
     df = df.drop_duplicates().reset_index(drop=True)
 
-    # Convert all column names to a consistent format (e.g., lowercased, no spaces) for robust matching
-    df.columns = df.columns.str.strip() # Remove leading/trailing spaces from column names
+    # Convert all column names to a consistent format (e.g., strip spaces, store original for display)
+    original_columns = df.columns.tolist() # Keep original column names
+    df.columns = df.columns.str.strip() # Clean column names for internal processing
 
-    # --- Create 'text' column using user-defined name or fallbacks ---
-    df['text'] = ''
-    
-    # Try user-defined text column first
-    if user_text_col and user_text_col in df.columns and not df[user_text_col].astype(str).str.strip().eq('').all():
-        df['text'] = df[user_text_col].astype(str).replace('nan', np.nan).fillna('')
+    # Helper to find column from candidates (case-insensitive)
+    def find_column(df_local, user_col, candidates):
+        if user_col and user_col in df_local.columns and not df_local[user_col].astype(str).str.strip().eq('').all():
+            return user_col
+        
+        # Try finding a candidate column (case-insensitive check)
+        df_columns_lower = [col.lower() for col in df_local.columns]
+        for candidate in candidates:
+            if candidate.lower() in df_columns_lower:
+                # Get the actual column name with its original casing
+                actual_col = df_local.columns[df_columns_lower.index(candidate.lower())]
+                if not df_local[actual_col].astype(str).str.strip().eq('').all():
+                    return actual_col
+        return None
+
+    # --- Create 'text' column ---
+    text_candidates_fallback = ['text', 'Hit Sentence', 'Opening Text', 'Headline', 'message', 'title', 'content', 'description', 'Body', 'FullText']
+    chosen_text_col = find_column(df, user_text_col, text_candidates_fallback)
+    if chosen_text_col:
+        df['text'] = df[chosen_text_col].astype(str).replace('nan', np.nan).fillna('')
     else:
-        text_candidates_fallback = ['text', 'Hit Sentence', 'Opening Text', 'Headline', 'message', 'title', 'content', 'description', 'Body', 'FullText']
-        found_text_fallback = False
-        for col_name in text_candidates_fallback:
-            if col_name in df.columns and not df[col_name].astype(str).str.strip().eq('').all():
-                df['text'] = df[col_name].astype(str).replace('nan', np.nan).fillna('')
-                found_text_fallback = True
-                break
-        if not found_text_fallback:
-            st.warning("⚠️ No suitable text column found. 'text' column might be empty.")
-            df['text'] = ""
+        st.warning(f"⚠️ No suitable text column found. Tried '{user_text_col}' and {text_candidates_fallback}. 'text' column might be empty.")
+        df['text'] = ""
 
     df['text'] = df['text'].astype(str).replace('nan', np.nan)
     df = df.dropna(subset=['text']).reset_index(drop=True)
     df['text'] = df['text'].astype(str)
     df = df[df['text'].str.strip() != ""].reset_index(drop=True)
 
-    # --- Populate 'Influencer' column using user-defined name or fallbacks ---
-    df['Influencer'] = "Unknown_User"
+    # --- Populate 'Influencer' column ---
+    influencer_candidates_fallback = [
+        'Influencer', 'author', 'username', 'user', 'authorMeta/name', 'creator', 'authorname', 'Source', 'media_name'
+    ]
+    chosen_influencer_col = find_column(df, user_influencer_col, influencer_candidates_fallback)
 
-    # 1. Try user-defined influencer column
-    if user_influencer_col and user_influencer_col in df.columns and not df[user_influencer_col].astype(str).str.strip().eq('').all():
-        df['Influencer'] = df[user_influencer_col].astype(str).replace('nan', np.nan).fillna('Unknown_User')
+    if chosen_influencer_col:
+        df['Influencer'] = df[chosen_influencer_col].astype(str).replace('nan', np.nan).fillna('Unknown_User')
     else:
-        # 2. Fallback to predefined influencer candidates
-        influencer_candidates_fallback = [
-            'Influencer', 'author', 'username', 'user', 'authorMeta/name', 'creator', 'authorname', 'Source', 'media_name'
-        ]
-        found_influencer_fallback = False
-        for col_name in influencer_candidates_fallback:
-            if col_name in df.columns and not df[col_name].astype(str).str.strip().eq('').all():
-                df['Influencer'] = df[col_name].astype(str).replace('nan', np.nan).fillna('Unknown_User')
-                found_influencer_fallback = True
-                break
-        
-        # 3. Last resort: Use Outlet as Influencer if no other influencer found
-        if not found_influencer_fallback:
-            df['Outlet'] = "Unknown_Outlet"
-            # Try user-defined outlet column
-            if user_outlet_col and user_outlet_col in df.columns and not df[user_outlet_col].astype(str).str.strip().eq('').all():
-                df['Outlet'] = df[user_outlet_col].astype(str).replace('nan', np.nan).fillna('Unknown_Outlet')
-            else:
-                # Fallback for outlet if user didn't specify or it's empty
-                outlet_candidates_fallback = ['media_name', 'channeltitle', 'source']
-                for col_name in outlet_candidates_fallback:
-                    if col_name in df.columns and not df[col_name].astype(str).str.strip().eq('').all():
-                        df['Outlet'] = df[col_name].astype(str).replace('nan', np.nan).fillna('Unknown_Outlet')
-                        break
-            
-            # If Outlet was found and Influencer is still "Unknown_User", use Outlet
-            if not df['Outlet'].astype(str).str.strip().eq('Unknown_Outlet').all() and df['Influencer'].astype(str).str.strip().eq('Unknown_User').all():
-                df['Influencer'] = df['Outlet']
-
+        st.warning(f"⚠️ No suitable Influencer column found. Tried '{user_influencer_col}' and {influencer_candidates_fallback}. Falling back to 'Outlet' if available, otherwise 'Unknown_User'.")
+        # Fallback to Outlet if no direct influencer column is found
+        outlet_candidates_fallback = ['media_name', 'channeltitle', 'source']
+        chosen_outlet_col = find_column(df, user_outlet_col, outlet_candidates_fallback)
+        if chosen_outlet_col:
+            df['Influencer'] = df[chosen_outlet_col].astype(str).replace('nan', np.nan).fillna('Unknown_User')
+            st.info(f"Using '{chosen_outlet_col}' as 'Influencer' column.")
+        else:
+            df['Influencer'] = "Unknown_User"
+            st.warning("⚠️ No suitable Outlet column found to fall back on for Influencer. Influencer column set to 'Unknown_User'.")
     df['Influencer'] = df['Influencer'].astype(str).replace('nan', np.nan).fillna('Unknown_User')
-    
-    # --- Timestamp Parsing using user-defined name or fallbacks ---
+
+    # --- Timestamp Parsing ---
     df['Timestamp'] = pd.NaT # Initialize with Not a Time
-    
-    # 1. Try user-defined timestamp column first
-    if user_timestamp_col and user_timestamp_col in df.columns:
-        df['Timestamp'] = pd.to_datetime(df[user_timestamp_col], errors='coerce')
-    
-    # 2. Fallback to predefined timestamp columns if user-defined failed or not provided/empty
-    if df['Timestamp'].isna().all(): # If all values are NaT after user-defined attempt
-        st.warning("⚠️ User-defined Timestamp column failed or not found. Falling back to other date candidates.")
-        date_candidates_fallback = ['Date', 'createTimeISO', 'published_date', 'pubDate', 'created_at', 'Alternate Date Format', 'publish_date']
-        for col_name in date_candidates_fallback:
-            if col_name in df.columns:
-                df['Timestamp'] = pd.to_datetime(df[col_name], errors='coerce')
-                if not df['Timestamp'].isna().all():
-                    break
-    
+    date_candidates_fallback = ['Date', 'createTimeISO', 'published_date', 'pubDate', 'created_at', 'Alternate Date Format', 'publish_date']
+    chosen_timestamp_col = find_column(df, user_timestamp_col, date_candidates_fallback)
+
+    if chosen_timestamp_col:
+        df['Timestamp'] = pd.to_datetime(df[chosen_timestamp_col], errors='coerce')
+    else:
+        st.warning(f"⚠️ No suitable Timestamp column found. Tried '{user_timestamp_col}' and {date_candidates_fallback}. Timestamp column might be incomplete.")
+
     date_formats = [
         '%b %d, %Y @ %H:%M:%S.%f', '%d-%b-%Y %I:%M%p', '%Y-%m-%d %H:%M:%S',
         '%d/%m/%Y %H:%M:%S', '%m/%d/%Y %H:%M:%S', '%Y-%m-%dT%H:%M:%SZ',
@@ -164,35 +147,34 @@ def preprocess_data(df, user_text_col, user_influencer_col, user_timestamp_col, 
     def parse_timestamp_robust(timestamp):
         if pd.isna(timestamp):
             return pd.NaT
-        if isinstance(timestamp, pd.Timestamp): # Already a timestamp
+        if isinstance(timestamp, pd.Timestamp):
             return timestamp
-        
-        # Try generic conversion first
+
         parsed = pd.to_datetime(timestamp, errors='coerce')
         if pd.notna(parsed): return parsed
 
-        # Then try specific formats
         for fmt in date_formats:
             try:
                 parsed = pd.to_datetime(timestamp, format=fmt, errors='coerce')
                 if pd.notna(parsed): return parsed
             except (ValueError, TypeError): continue
         return pd.NaT
-    
-    # Apply robust parsing to any remaining NaT values or if initial parsing failed
-    if df['Timestamp'].isna().any():
-        # Iterate over rows and apply parsing if Timestamp is still NaT
-        # This approach can be slow for very large datasets, but more robust for mixed formats
-        for idx, row in df[df['Timestamp'].isna()].iterrows():
-            if user_timestamp_col in row and pd.notna(row[user_timestamp_col]):
-                df.loc[idx, 'Timestamp'] = parse_timestamp_robust(row[user_timestamp_col])
-            else: # Try fallback candidates if user_timestamp_col wasn't available or was empty
-                for col_name in date_candidates_fallback:
-                    if col_name in row and pd.notna(row[col_name]):
-                        df.loc[idx, 'Timestamp'] = parse_timestamp_robust(row[col_name])
-                        if pd.notna(df.loc[idx, 'Timestamp']):
-                            break
 
+    # Apply robust parsing to any remaining NaT values
+    if df['Timestamp'].isna().any():
+        if chosen_timestamp_col:
+            # Re-attempt parsing for NaNs in the chosen column
+            df.loc[df['Timestamp'].isna(), 'Timestamp'] = df.loc[df['Timestamp'].isna(), chosen_timestamp_col].apply(parse_timestamp_robust)
+        else:
+            # If no column was initially chosen, iterate through fallbacks for NaNs
+            for col_name in date_candidates_fallback:
+                # Find the actual column name (case-insensitive)
+                df_columns_lower = [col.lower() for col in df.columns]
+                if col_name.lower() in df_columns_lower:
+                    actual_fallback_col = df.columns[df_columns_lower.index(col_name.lower())]
+                    df.loc[df['Timestamp'].isna(), 'Timestamp'] = df.loc[df['Timestamp'].isna(), actual_fallback_col].apply(parse_timestamp_robust)
+                    if not df['Timestamp'].isna().all():
+                        break
 
     def localize_to_utc(dt):
         if pd.isna(dt): return dt
@@ -202,30 +184,32 @@ def preprocess_data(df, user_text_col, user_influencer_col, user_timestamp_col, 
     df['Timestamp'] = df['Timestamp'].apply(localize_to_utc)
     df = df.dropna(subset=["Timestamp"]).reset_index(drop=True)
 
-    # --- Create 'URL' column using user-defined name or fallbacks ---
-    df['URL'] = np.nan # Initialize as NaN
+    # --- Create 'URL' column ---
+    url_candidates_fallback = ['URL', 'url', 'webVideoUrl', 'link', 'post_url', 'media_url']
+    chosen_url_col = find_column(df, user_url_col, url_candidates_fallback)
 
-    # 1. Try user-defined URL column first
-    if user_url_col and user_url_col in df.columns and not df[user_url_col].astype(str).str.strip().eq('').all():
-        df['URL'] = df[user_url_col].astype(str).replace('nan', np.nan).fillna(np.nan)
+    if chosen_url_col:
+        df['URL'] = df[chosen_url_col].astype(str).replace('nan', np.nan).fillna(np.nan)
     else:
-        # 2. Fallback to predefined URL candidates
-        url_candidates_fallback = ['URL', 'url', 'webVideoUrl', 'link', 'post_url']
-        found_url_fallback = False
-        for col_name in url_candidates_fallback:
-            if col_name in df.columns and not df[col_name].astype(str).str.strip().eq('').all():
-                df['URL'] = df[col_name].astype(str).replace('nan', np.nan).fillna(np.nan)
-                found_url_fallback = True
-                break
-        if not found_url_fallback:
-            st.sidebar.warning("⚠️ No suitable URL column found. Platform detection will be limited.")
-    
-    # --- Create 'Platform' from URL ---
-    if 'URL' in df.columns and not df['URL'].empty and df['URL'].notna().any():
+        df['URL'] = np.nan
+        st.sidebar.warning(f"⚠️ No suitable URL column found. Tried '{user_url_col}' and {url_candidates_fallback}. Platform detection will be limited.")
+
+    # --- Create 'Platform' from URL or existing 'Platform' column ---
+    if 'Platform' in df.columns and not df['Platform'].empty and df['Platform'].notna().any():
+        # If a 'Platform' column already exists in the original data, use it.
+        # Ensure its values are reasonable (e.g., string, not all NaN/empty)
+        if df['Platform'].astype(str).str.strip().eq('').all(): # if existing platform column is empty
+             if 'URL' in df.columns and not df['URL'].empty and df['URL'].notna().any():
+                df['Platform'] = df['URL'].apply(infer_platform_from_url)
+             else:
+                df['Platform'] = "Unknown"
+        # Otherwise, assume existing Platform column is good
+    elif 'URL' in df.columns and not df['URL'].empty and df['URL'].notna().any():
         df['Platform'] = df['URL'].apply(infer_platform_from_url)
     else:
         df['Platform'] = "Unknown"
         st.sidebar.warning("⚠️ No URL column found or URL column is empty → all platforms marked as 'Unknown'")
+
 
     # --- Clean Text Further (after 'text' column is finalized) ---
     def clean_text_final(text):
@@ -309,14 +293,14 @@ def find_textual_similarities(df, threshold=0.85):
         })
     return pd.DataFrame(similar_pairs)
 
-# --- Clustering and Graph Building Functions (from user's modules.clustering_utils) ---
+# --- Clustering and Graph Building Functions ---
 def cluster_texts(df, eps=0.3, min_samples=2):
     # Ensure 'original_text' exists before vectorizing
     if 'original_text' not in df.columns:
         df['original_text'] = df['text'].apply(extract_original_text) # Fallback in case it's not present
 
     texts_to_cluster = df['original_text'].astype(str).tolist()
-    
+
     if not texts_to_cluster or all(text.strip() == "" for text in texts_to_cluster):
         st.warning("No valid text data for clustering. Assigning all to cluster 0.")
         df_copy = df.copy()
@@ -331,7 +315,7 @@ def cluster_texts(df, eps=0.3, min_samples=2):
         df_copy = df.copy()
         df_copy['cluster'] = 0
         return df_copy
-        
+
     clustering = DBSCAN(metric='cosine', eps=eps, min_samples=min_samples).fit(tfidf_matrix)
     df_copy = df.copy()
     df_copy['cluster'] = clustering.labels_
@@ -339,33 +323,25 @@ def cluster_texts(df, eps=0.3, min_samples=2):
 
 def build_user_interaction_graph(df):
     G = nx.Graph()
-    # Simple: connect users who share same narrative (via high similarity or same cluster)
-    # Ensure 'Influencer' is used as the node name, not 'Source' as in the original module
     grouped = df.groupby('cluster')
     for cluster_id, group in grouped:
         if cluster_id == -1 or len(group) < 2: # -1 is noise, or too few members
             continue
-        users = group['Influencer'].dropna().unique().tolist() # Use 'Influencer'
+        users = group['Influencer'].dropna().unique().tolist()
         for u1, u2 in combinations(users, 2):
             if G.has_edge(u1, u2):
                 G[u1][u2]['weight'] += 1
             else:
                 G.add_edge(u1, u2, weight=1)
-    
-    # Create position for all nodes, including isolated ones if needed
+
     all_influencers = df['Influencer'].dropna().unique().tolist()
     for inf in all_influencers:
         if inf not in G.nodes():
             G.add_node(inf)
 
-    # Use a layout that handles disconnected components well
-    pos = nx.spring_layout(G, seed=42, k=0.1, iterations=50) # Adjust k and iterations for better spread
+    pos = nx.spring_layout(G, seed=42, k=0.1, iterations=50)
 
-    # Create a cluster map for coloring nodes
-    # If a user is in multiple clusters (e.g. if the original_text has multiple posts), pick the first one
-    # Use 'Influencer' as the key for the cluster map
     cluster_map = df.set_index('Influencer')['cluster'].to_dict()
-    # Ensure every node in G has a cluster ID. Default to 0 if not found.
     final_cluster_map = {node: cluster_map.get(node, 0) for node in G.nodes()}
 
     return G, pos, final_cluster_map
@@ -381,7 +357,6 @@ def cached_clustering(_df):
     """
     Performs text clustering using the integrated DBSCAN clustering function.
     """
-    # Directly call the defined cluster_texts function
     return cluster_texts(_df)
 
 @st.cache_data(show_spinner="🕸️ Building network graph...")
@@ -389,7 +364,6 @@ def cached_network_graph(_df):
     """
     Builds a user interaction network graph using the integrated function.
     """
-    # Directly call the defined build_user_interaction_graph function
     return build_user_interaction_graph(_df)
 
 # --- Data Source Selection ---
@@ -399,12 +373,11 @@ data_source_option = st.sidebar.radio(
     ("Use Default Data", "Upload CSV")
 )
 
-df = pd.DataFrame() # Initialize df to an empty DataFrame
+df = pd.DataFrame()
 
 if data_source_option == "Use Default Data":
     df = load_default_dataset()
 elif data_source_option == "Upload CSV":
-    # Allow multiple file uploads
     uploaded_files = st.sidebar.file_uploader("Upload your CSV file(s)", type=["csv"], accept_multiple_files=True)
     if uploaded_files:
         dfs_from_upload = []
@@ -420,24 +393,70 @@ elif data_source_option == "Upload CSV":
             st.sidebar.info(f"Combined data from {len(dfs_from_upload)} file(s).")
         else:
             st.error("No valid CSV files were uploaded or could be processed.")
-            df = pd.DataFrame() # Ensure df is empty if an error occurs
+            df = pd.DataFrame()
     else:
-        df = pd.DataFrame() # Ensure df is empty if no files are uploaded
+        df = pd.DataFrame()
 
 # Exit if no data after selection
 if df is None or df.empty:
     st.warning("No data available. Please select a data source and ensure it's valid.")
     st.stop()
 
+# Get columns for selectboxes
+all_columns = df.columns.tolist()
+# Add a default selection option at the beginning
+column_selection_options = ["-- Select Column --"] + all_columns
+
 # --- Flexible Column Mapping Input ---
 st.sidebar.header("⚙️ Column Mappings")
-st.sidebar.markdown("Specify the column names from your data for key fields.")
+st.sidebar.markdown("Please select the correct columns from your data:")
 
-user_text_col = st.sidebar.text_input("Main Text Column", value="text", help="e.g., 'message', 'content', 'FullText', 'text', 'Hit Sentence'")
-user_influencer_col = st.sidebar.text_input("Influencer/Author Column", value="Influencer", help="e.g., 'username', 'author', 'Source', 'authorMeta/name','media_name'")
-user_timestamp_col = st.sidebar.text_input("Timestamp Column", value="Timestamp", help="e.g., 'Date', 'published_date', 'created_at', 'publish_date'")
-user_url_col = st.sidebar.text_input("URL Column", value="URL", help="e.g., 'link', 'post_url', 'url', 'media_url', 'webVideoUrl', 'URL'")
-user_outlet_col = st.sidebar.text_input("Media Outlet/Channel Column (Optional)", value="Outlet", help="e.g., 'media_name', 'channeltitle', 'source'")
+# Function to get default index for selectbox
+def get_default_index(col_name, options):
+    try:
+        # Check if the desired column name (case-insensitive) is in the options
+        lower_options = [opt.lower() for opt in options]
+        if col_name.lower() in lower_options:
+            return lower_options.index(col_name.lower()) # Return index of the first match
+    except ValueError:
+        pass
+    return 0 # Default to "-- Select Column --"
+
+user_text_col = st.sidebar.selectbox(
+    "Main Text Column",
+    options=column_selection_options,
+    index=get_default_index("text", column_selection_options),
+    help="Select the column containing the main text of the posts (e.g., 'message', 'content', 'FullText', 'text', 'Hit Sentence')."
+)
+user_influencer_col = st.sidebar.selectbox(
+    "Influencer/Author Column",
+    options=column_selection_options,
+    index=get_default_index("Influencer", column_selection_options),
+    help="Select the column identifying the influencer or author (e.g., 'username', 'author', 'Source', 'media_name', 'Influencer', 'channel name', 'authorMeta/name')."
+)
+user_timestamp_col = st.sidebar.selectbox(
+    "Timestamp Column",
+    options=column_selection_options,
+    index=get_default_index("Timestamp", column_selection_options),
+    help="Select the column containing the date and time of the post (e.g., 'Date', 'published_date', 'created_at', 'publish_date')."
+)
+user_url_col = st.sidebar.selectbox(
+    "URL Column",
+    options=column_selection_options,
+    index=get_default_index("URL", column_selection_options),
+    help="Select the column with the URL of the post (e.g., 'link', 'post_url', 'webVideoUrl', 'URL'). This is used to infer the platform."
+)
+user_outlet_col = st.sidebar.selectbox(
+    "Media Outlet/Channel Column (Optional)",
+    options=column_selection_options,
+    index=get_default_index("Outlet", column_selection_options),
+    help="Select the column for media outlet or channel. (e.g., 'Twitter', 'TikTok', 'Media outlet', 'Telegram', 'Facebook'). This can be used as a fallback for Influencer if no specific influencer column is found."
+)
+
+# Warn if default selection is still present
+if "-- Select Column --" in [user_text_col, user_influencer_col, user_timestamp_col, user_url_col]:
+    st.sidebar.warning("Please ensure all required column mappings are selected from the dropdowns.")
+    st.stop()
 
 
 # --- Preprocess ---
@@ -512,8 +531,8 @@ with tab1:
 
     st.markdown("### 🔬 Preprocessed Data Sample (for debugging column values)")
     st.write("Check the values in 'Influencer', 'Platform', and 'URL' columns below to ensure they are correctly identified after preprocessing.")
-    st.dataframe(df[['Influencer', 'Platform', 'URL']].head(10)) # Display first 10 rows of relevant columns
-    st.markdown("---") # Separator
+    st.dataframe(df[['Influencer', 'Platform', 'URL']].head(10))
+    st.markdown("---")
 
     if not filtered_df.empty:
         st.write("This chart shows the top 10 influencers by the number of posts in the filtered dataset.")
@@ -523,23 +542,20 @@ with tab1:
 
         if 'Platform' in filtered_df.columns and not filtered_df['Platform'].empty:
             st.write("This chart displays the distribution of posts across all identified social media and media platforms in the dataset.")
-            # Changed to show all platforms, not just top 10
             all_platforms_counts = filtered_df['Platform'].value_counts()
             fig_platform = px.bar(all_platforms_counts, title="Post Distribution by Platform", labels={'value': 'Posts', 'index': 'Platform'})
             st.plotly_chart(fig_platform, use_container_width=True)
         else:
             st.info("No 'Platform' column found or no data for platforms. This typically happens if no URLs are present in the data.")
 
-        # Note: The 'Channel' column mapping is handled via user_outlet_col or fallbacks to 'media_name', 'channeltitle', 'source'
-        # The chart below assumes a 'Channel' column exists, which might not be directly created if user_outlet_col is used for 'Outlet'
-        # It might be better to use 'Outlet' here, as that's what's actually processed by the pipeline if the user provides it.
-        # For now, keeping 'Channel' as it was, but this is a potential point of future refinement.
-        if 'Outlet' in filtered_df.columns and not filtered_df['Outlet'].empty: # Check for 'Outlet' column as per preprocessing
+        if 'Outlet' in filtered_df.columns and not filtered_df['Outlet'].empty:
             st.write("This chart illustrates the top 10 media outlets or channels where content was published.")
             top_outlets = filtered_df['Outlet'].value_counts().head(10)
             fig_outlet = px.bar(top_outlets, title="Top 10 Media Outlets/Channels", labels={'value': 'Posts', 'index': 'Outlet'})
             st.plotly_chart(fig_outlet, use_container_width=True)
-        elif 'Channel' in filtered_df.columns and not filtered_df['Channel'].empty: # Fallback if 'Channel' still exists for some reason
+        # Note: 'Channel' is no longer a primary target, as 'Outlet' handles this via mapping/fallbacks.
+        # This elif block is kept for backward compatibility if 'Channel' exists and 'Outlet' does not.
+        elif 'Channel' in filtered_df.columns and not filtered_df['Channel'].empty:
             st.write("This chart illustrates the top 10 channels where content was published.")
             top_channels = filtered_df['Channel'].value_counts().head(10)
             fig_chan = px.bar(top_channels, title="Top 10 Channels", labels={'value': 'Posts', 'index': 'Channel'})
@@ -607,14 +623,11 @@ with tab2:
             st.dataframe(narrative_summary)
             st.markdown("### 🔄 Full Similarity Pairs")
             st.write("This table lists all detected pairs of similar texts, along with their influencers, timestamps, similarity scores, and links to the original posts for verification.")
-            
-            # Create a display DataFrame with formatted URLs
+
             display_sim_df = sim_df.drop(columns=['shared_narrative'], errors='ignore').copy()
-            # Convert URLs to clickable links
             display_sim_df['url1'] = display_sim_df['url1'].apply(lambda x: f'<a href="{x}" target="_blank">{x}</a>' if pd.notna(x) else '')
             display_sim_df['url2'] = display_sim_df['url2'].apply(lambda x: f'<a href="{x}" target="_blank">{x}</a>' if pd.notna(x) else '')
-            
-            # Render as HTML to make links clickable
+
             st.markdown(display_sim_df.to_html(escape=False), unsafe_allow_html=True)
 
         else:
@@ -623,9 +636,9 @@ with tab2:
 # ==================== TAB 3: Network & Risk ====================
 with tab3:
     st.subheader("🚨 High-Risk Accounts & Networks")
-    
+
     max_influencers_graph = st.sidebar.slider(
-        "Max Influencers for Network Graph", 
+        "Max Influencers for Network Graph",
         min_value=10, max_value=200, value=50, step=10,
         help="Limit the number of influencers displayed in the network graph to improve performance."
     )
@@ -678,26 +691,26 @@ with tab3:
         else:
             clustered_influencers = graph_df[graph_df['cluster'] != -1]['Influencer'].value_counts().index.tolist()
             all_influencers_by_post = graph_df['Influencer'].value_counts().index.tolist()
-            
+
             selected_influencers = []
             seen_influencers = set()
-            
+
             for inf in clustered_influencers:
                 if inf not in seen_influencers and len(selected_influencers) < max_influencers_graph:
                     selected_influencers.append(inf)
                     seen_influencers.add(inf)
-            
+
             for inf in all_influencers_by_post:
                 if inf not in seen_influencers and len(selected_influencers) < max_influencers_graph:
                     selected_influencers.append(inf)
                     seen_influencers.add(inf)
-            
+
             graph_df_subset = graph_df[graph_df['Influencer'].isin(selected_influencers)].copy()
 
             if graph_df_subset.empty:
                 st.info("No data for selected influencers to build the network graph. Try increasing the 'Max Influencers for Network Graph' slider.")
             else:
-                G, pos, cluster_map = cached_network_graph(graph_df_subset) 
+                G, pos, cluster_map = cached_network_graph(graph_df_subset)
 
                 if not G.nodes():
                     st.info("No nodes to display in the network graph. This might be due to filtered data or issues in graph creation.")
@@ -708,31 +721,31 @@ with tab3:
                         x1, y1 = pos[edge[1]]
                         edge_trace.append(go.Scatter(x=[x0, x1], y=[y0, y1], mode='lines', line=dict(width=0.8, color='#888'), hoverinfo='none'))
 
-                    node_colors = [cluster_map.get(node, -2) for node in G.nodes()] 
+                    node_colors = [cluster_map.get(node, -2) for node in G.nodes()]
                     unique_clusters = sorted(list(set(node_colors)))
 
                     color_map = {c: i for i, c in enumerate(unique_clusters)}
                     mapped_node_colors = [color_map[c] for c in node_colors]
 
                     if len(unique_clusters) == 1:
-                        marker_colorscale = px.colors.qualitative.Plotly[0] 
+                        marker_colorscale = px.colors.qualitative.Plotly[0]
                         node_color_vals = [marker_colorscale] * len(mapped_node_colors)
                         colorbar_dict = None
                     else:
-                        color_palette = px.colors.qualitative.Set3 
+                        color_palette = px.colors.qualitative.Set3
                         extended_color_palette = color_palette * ((len(unique_clusters) // len(color_palette)) + 1)
-                        
+
                         marker_colors = [extended_color_palette[color_map[c]] for c in unique_clusters]
-                        
+
                         node_color_vals = [extended_color_palette[color_map[c]] for c in node_colors]
 
                         colorbar_dict = dict(
                             title="Clusters",
-                            tickvals=[color_map[c] for c in unique_clusters], 
-                            ticktext=[str(c) for c in unique_clusters], 
-                            x=1.02, 
+                            tickvals=[color_map[c] for c in unique_clusters],
+                            ticktext=[str(c) for c in unique_clusters],
+                            x=1.02,
                             xanchor="left",
-                            len=0.7 
+                            len=0.7
                         )
 
                     node_trace = go.Scatter(
@@ -743,15 +756,15 @@ with tab3:
                         textposition="top center",
                         marker=dict(
                             size=12,
-                            color=node_color_vals, 
+                            color=node_color_vals,
                             line=dict(width=2, color='darkblue'),
-                            colorbar=colorbar_dict 
+                            colorbar=colorbar_dict
                         ),
                         hoverinfo='text'
                     )
 
                     st.write("This interactive graph visualizes the network of influencers, with nodes representing influencers and edges indicating interactions or shared narratives. Nodes are colored by their detected cluster.")
-                    if len(selected_influencers) < len(seen_influencers): 
+                    if len(selected_influencers) < len(seen_influencers):
                          st.info(f"Displaying a subset of {len(G.nodes())} influencers in the network graph based on your filter and the 'Max Influencers for Network Graph' setting. Adjust the slider in the sidebar to include more influencers.")
                     fig_net = go.Figure(data=edge_trace + [node_trace],
                                         layout=go.Layout(
