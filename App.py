@@ -119,7 +119,7 @@ def preprocess_data(df):
     df = df.rename(columns=new_columns_dict)
     df = df.loc[:,~df.columns.duplicated()]
 
-    #st.info(f"Columns after initial mapping: {df.columns.tolist()}")
+    st.info(f"Columns after initial mapping: {df.columns.tolist()}")
 
     # --- Create 'text' column, prioritizing 'Hit Sentence' ---
     df['text'] = ''
@@ -163,14 +163,25 @@ def preprocess_data(df):
         st.warning(f"⚠️ Missing required columns after processing: {missing_cols}")
         for col in missing_cols:
             if col == "Influencer":
-                df['Influencer'] = "Unknown_User"
-                st.warning(f"Defaulting '{col}' to 'Unknown_User'.")
+                # Check for 'Outlet' as a fallback for Influencer if no primary influencer column exists
+                if 'Outlet' in df.columns and not df['Outlet'].empty and df['Influencer'].astype(str).str.strip().eq('').all():
+                    df['Influencer'] = df['Outlet'].astype(str).replace('nan', np.nan).fillna('Unknown_User')
+                    st.warning(f"Defaulting '{col}' to 'Outlet' (which includes 'media_name').")
+                else:
+                    df['Influencer'] = "Unknown_User"
+                    st.warning(f"Defaulting '{col}' to 'Unknown_User'.")
             elif col == "Timestamp":
                 df['Timestamp'] = pd.Timestamp.now(tz='UTC')
                 st.warning(f"Defaulting '{col}' to current UTC time.")
             else:
                 st.error(f"🛑 Critical: Still missing required column: '{col}'. Cannot proceed.")
                 st.stop()
+
+    # Ensure Influencer column is always present and clean
+    if 'Influencer' not in df.columns:
+        df['Influencer'] = "Unknown_User"
+    df['Influencer'] = df['Influencer'].astype(str).replace('nan', np.nan).fillna('Unknown_User')
+
 
     # --- Timestamp Parsing ---
     date_formats = [
@@ -376,16 +387,25 @@ df = pd.DataFrame() # Initialize df to an empty DataFrame
 if data_source_option == "Use Default Data":
     df = load_default_dataset()
 elif data_source_option == "Upload CSV":
-    uploaded_file = st.sidebar.file_uploader("Upload your CSV file", type=["csv"])
-    if uploaded_file is not None:
-        try:
-            df = pd.read_csv(uploaded_file)
-            st.sidebar.success("✅ CSV uploaded successfully!")
-            # Clear default data success message if new data is uploaded
-            st.session_state['default_data_loaded'] = False
-        except Exception as e:
-            st.error(f"Error reading CSV file: {e}")
+    # Allow multiple file uploads
+    uploaded_files = st.sidebar.file_uploader("Upload your CSV file(s)", type=["csv"], accept_multiple_files=True)
+    if uploaded_files:
+        dfs_from_upload = []
+        for uploaded_file in uploaded_files:
+            try:
+                df_temp = pd.read_csv(uploaded_file)
+                dfs_from_upload.append(df_temp)
+                st.sidebar.success(f"✅ CSV '{uploaded_file.name}' uploaded successfully!")
+            except Exception as e:
+                st.error(f"Error reading CSV file '{uploaded_file.name}': {e}")
+        if dfs_from_upload:
+            df = pd.concat(dfs_from_upload, ignore_index=True)
+            st.sidebar.info(f"Combined data from {len(dfs_from_upload)} file(s).")
+        else:
+            st.error("No valid CSV files were uploaded or could be processed.")
             df = pd.DataFrame() # Ensure df is empty if an error occurs
+    else:
+        df = pd.DataFrame() # Ensure df is empty if no files are uploaded
 
 # Exit if no data after selection
 if df is None or df.empty:
