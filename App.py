@@ -73,7 +73,6 @@ def preprocess_data(df, user_text_col, user_influencer_col, user_timestamp_col, 
     df = df.drop_duplicates().reset_index(drop=True)
 
     # Convert all column names to a consistent format (e.g., strip spaces, store original for display)
-    # No need to keep original columns, just strip for internal use
     df.columns = df.columns.str.strip() # Clean column names for internal processing
 
     # Helper to find column from candidates (case-insensitive)
@@ -176,12 +175,7 @@ def preprocess_data(df, user_text_col, user_influencer_col, user_timestamp_col, 
                     if not df['Timestamp'].isna().all():
                         break
 
-    def localize_to_utc(dt):
-        if pd.isna(dt): return dt
-        if dt.tzinfo is None: return dt.tz_localize('UTC')
-        else: return dt.tz_convert('UTC')
-
-    df['Timestamp'] = df['Timestamp'].apply(localize_to_utc)
+    df['Timestamp'] = df['Timestamp'].apply(lambda x: x.tz_localize('UTC') if pd.notna(x) and x.tzinfo is None else x.tz_convert('UTC'))
     df = df.dropna(subset=["Timestamp"]).reset_index(drop=True)
 
     # --- Create 'URL' column ---
@@ -199,12 +193,12 @@ def preprocess_data(df, user_text_col, user_influencer_col, user_timestamp_col, 
         # If a 'Platform' column already exists in the original data, use it.
         # Ensure its values are reasonable (e.g., string, not all NaN/empty)
         if df['Platform'].astype(str).str.strip().eq('').all(): # if existing platform column is empty
-             if 'URL' in df.columns and not df['URL'].empty and df['URL'].notna().any():
+             if 'URL' in df.columns and pd.notna(df['URL']).any(): # Check if URL column has any valid data
                 df['Platform'] = df['URL'].apply(infer_platform_from_url)
              else:
                 df['Platform'] = "Unknown"
         # Otherwise, assume existing Platform column is good
-    elif 'URL' in df.columns and not df['URL'].empty and df['URL'].notna().any():
+    elif 'URL' in df.columns and pd.notna(df['URL']).any(): # Check if URL column has any valid data
         df['Platform'] = df['URL'].apply(infer_platform_from_url)
     else:
         df['Platform'] = "Unknown"
@@ -280,7 +274,7 @@ def find_textual_similarities(df, threshold=0.85):
             narrative_snippet = "Empty/Cleaned Text"
         
         platforms_involved = sorted(list(set([row1['Platform'], row2['Platform']])))
-        platforms_involved_str = ", ".join(platforms_involved)
+        platforms_involved_str = ", ".join(p for p in platforms_involved if pd.notna(p) and p.strip() != "")
 
         similar_pairs.append({
             'text1': row1['original_text'],
@@ -341,7 +335,7 @@ def build_user_interaction_graph(df):
                 G.add_edge(u1, u2, weight=1)
 
     all_influencers = df['Influencer'].dropna().unique().tolist()
-    # Also capture their primary platform for node attributes
+    # Capture primary platform for each influencer for node attributes
     influencer_platform_map = df.groupby('Influencer')['Platform'].apply(lambda x: x.mode()[0] if not x.mode().empty else 'Unknown').to_dict()
 
     for inf in all_influencers:
@@ -353,7 +347,7 @@ def build_user_interaction_graph(df):
     pos = nx.spring_layout(G, seed=42, k=0.1, iterations=50)
 
     cluster_map = df.set_index('Influencer')['cluster'].to_dict()
-    final_cluster_map = {node: cluster_map.get(node, 0) for node in G.nodes()}
+    final_cluster_map = {node: cluster_map.get(node, 0) for node in G.nodes()} # Default to 0 if not in a cluster
 
     return G, pos, final_cluster_map
 
@@ -371,11 +365,12 @@ def cached_clustering(_df):
     return cluster_texts(_df)
 
 @st.cache_data(show_spinner="🕸️ Building network graph...")
-def cached_network_graph(_df):
+def cached_network_graph(_df_for_graph):
     """
     Builds a user interaction network graph using the integrated function.
+    Takes a potentially filtered DataFrame for the graph.
     """
-    return build_user_interaction_graph(_df)
+    return build_user_interaction_graph(_df_for_graph)
 
 # --- Data Source Selection ---
 st.sidebar.header("📥 Data Source")
@@ -392,7 +387,7 @@ elif data_source_option == "Upload CSV":
     uploaded_files = st.sidebar.file_uploader("Upload your CSV file(s)", type=["csv"], accept_multiple_files=True)
     if uploaded_files:
         if len(uploaded_files) > 1:
-            st.sidebar.warning("You uploaded multiple files. Please ensure critical columns (like text, influencer, timestamp, URL) have consistent names across all files for accurate mapping and analysis.")
+            st.sidebar.warning("You uploaded multiple files. For best results, consider harmonizing column names (e.g., 'text', 'influencer') across files before upload if they differ significantly.")
         dfs_from_upload = []
         for uploaded_file in uploaded_files:
             try:
@@ -545,7 +540,7 @@ tab1, tab2, tab3 = st.tabs(["📊 Overview", "🔍 Analysis", "🌐 Network & Ri
 with tab1:
     st.subheader("📌 Summary Statistics")
 
-    st.markdown("### 🔬 Preprocessed Data Sample")
+    st.markdown("### 🔬 Preprocessed Data Sample)")
     st.write("Check the values in 'Influencer', 'Platform', and 'URL' columns below to ensure they are correctly identified after preprocessing.")
     st.dataframe(df[['Influencer', 'Platform', 'URL']].head(10))
     st.markdown("---")
@@ -650,7 +645,7 @@ with tab2:
             narrative_summary = sim_df.groupby('shared_narrative').agg(
                 share_count=('similarity', 'count'),
                 influencers_involved=('influencer1', lambda x: ", ".join(x.astype(str).unique()[:5]) + ("..." if len(x.unique()) > 5 else "")),
-                platforms_involved=('platforms_involved', lambda x: ", ".join(sorted(list(set([p.strip() for sublist in x.tolist() for p in sublist.split(',')])))))
+                platforms_involved=('platforms_involved', lambda x: ", ".join(sorted(list(set([p.strip() for sublist in x.tolist() for p in sublist.split(',') if p.strip() != ""]))))) # Added check for empty strings
             ).sort_values(by='share_count', ascending=False).reset_index()
 
             st.markdown("### 🔝 Top Coordinated Narratives")
@@ -697,13 +692,6 @@ with tab3:
     
     network_df_filtered_by_platform = filtered_df_global[filtered_df_global['Platform'].isin(platforms_network)].copy()
 
-    max_influencers_graph = st.slider(
-        "Max Influencers for Network Graph (for performance)",
-        min_value=10, max_value=200, value=50, step=10,
-        help="Limit the number of influencers displayed in the network graph to improve performance.",
-        key="max_influencers_graph"
-    )
-
     try:
         # Ensure original_text column is present and valid
         if 'original_text' not in network_df_filtered_by_platform.columns:
@@ -736,6 +724,20 @@ with tab3:
                     color_discrete_sequence=px.colors.qualitative.Set3
                 )
                 st.plotly_chart(fig_clust, use_container_width=True)
+                
+                # New: Cluster Summary Table
+                st.markdown("#### Cluster Summary")
+                if not clustered_df[clustered_df['cluster'] != -1].empty:
+                    cluster_details = clustered_df[clustered_df['cluster'] != -1].groupby('cluster').agg(
+                        num_posts=('text', 'count'),
+                        num_influencers=('Influencer', 'nunique'),
+                        example_influencers=('Influencer', lambda x: ", ".join(x.unique()[:3]) + ("..." if len(x.unique()) > 3 else "")),
+                        platforms=('Platform', lambda x: ", ".join(sorted(x.unique())))
+                    ).sort_values(by='num_posts', ascending=False).reset_index()
+                    st.dataframe(cluster_details)
+                else:
+                    st.info("No detailed summary for clusters (all posts might be noise or too few posts for coordination).")
+
                 st.write("This table shows the influencers, their posts, timestamps, and their assigned cluster IDs.")
                 st.dataframe(clustered_df[['Influencer', 'Platform', 'text', 'Timestamp', 'cluster']])
             else:
@@ -756,37 +758,47 @@ with tab3:
         For example, all influencers within the 'blue' group are part of one coordinated cluster, while those in the 'green' group belong to a different one.
         The specific meaning of each color is not fixed (e.g., 'red' doesn't always mean the same thing across different analyses), but its purpose is to help you quickly see which influencers are working together on similar themes.
     """)
-    try:
-        # Ensure graph_df is always a fresh copy of the relevant DataFrame
-        graph_df = clustered_df.copy() if 'clustered_df' in locals() and not clustered_df.empty else network_df_filtered_by_platform.copy()
+    
+    max_influencers_graph = st.slider(
+        "Max Influencers for Network Graph (for performance)",
+        min_value=10, max_value=200, value=50, step=10,
+        help="Limit the number of influencers displayed in the network graph to improve performance.",
+        key="max_influencers_graph"
+    )
 
-        if graph_df.empty or graph_df['Influencer'].dropna().empty:
+    num_top_clusters_to_show = 0 # Initialize outside conditional block
+    if 'cluster_counts' in locals() and not cluster_counts.empty:
+        num_top_clusters_to_show = st.slider(
+            "Display Top N Largest Clusters in Network Graph",
+            min_value=1, max_value=len(cluster_counts.index), value=min(5, len(cluster_counts.index)), step=1,
+            help="Select how many of the largest coordinated clusters to visualize in the network graph.",
+            key='num_top_clusters_to_show'
+        )
+
+    try:
+        # Determine the DataFrame subset to use for graph generation
+        graph_df_base = clustered_df.copy() if 'clustered_df' in locals() and not clustered_df.empty else network_df_filtered_by_platform.copy()
+
+        if graph_df_base.empty or graph_df_base['Influencer'].dropna().empty:
             st.info("No valid influencer data to build the network graph.")
         else:
-            # Prioritize influencers in clusters, then by post count, up to max_influencers_graph
-            clustered_influencers = graph_df[graph_df['cluster'] != -1]['Influencer'].value_counts().index.tolist()
-            all_influencers_by_post = graph_df['Influencer'].value_counts().index.tolist()
+            # Filter for top clusters if a number is selected
+            if num_top_clusters_to_show > 0 and 'cluster_counts' in locals() and not cluster_counts.empty:
+                top_cluster_ids = cluster_counts.nlargest(num_top_clusters_to_show).index.tolist()
+                # Include all posts from influencers who are part of these top clusters
+                influencers_in_top_clusters = graph_df_base[graph_df_base['cluster'].isin(top_cluster_ids)]['Influencer'].unique().tolist()
+                graph_df_filtered_for_top_clusters = graph_df_base[graph_df_base['Influencer'].isin(influencers_in_top_clusters)].copy()
+            else:
+                # If no clusters or no selection, use the general filtered network data
+                graph_df_filtered_for_top_clusters = graph_df_base.copy()
 
-            selected_influencers = []
-            seen_influencers = set()
+            # Now, apply the overall max_influencers_graph limit to the current filtered set
+            top_active_influencers_in_subset = graph_df_filtered_for_top_clusters['Influencer'].value_counts().nlargest(max_influencers_graph).index.tolist()
+            graph_df_subset = graph_df_filtered_for_top_clusters[graph_df_filtered_for_top_clusters['Influencer'].isin(top_active_influencers_in_subset)].copy()
 
-            # Add clustered influencers first
-            for inf in clustered_influencers:
-                if inf not in seen_influencers and len(selected_influencers) < max_influencers_graph:
-                    selected_influencers.append(inf)
-                    seen_influencers.add(inf)
-
-            # Fill up with other high-post-count influencers if space remains
-            for inf in all_influencers_by_post:
-                if inf not in seen_influencers and len(selected_influencers) < max_influencers_graph:
-                    selected_influencers.append(inf)
-                    seen_influencers.add(inf)
-            
-            # Filter graph_df for only the selected influencers
-            graph_df_subset = graph_df[graph_df['Influencer'].isin(selected_influencers)].copy()
 
             if graph_df_subset.empty:
-                st.info("No data for selected influencers to build the network graph. Try increasing the 'Max Influencers for Network Graph' slider.")
+                st.info("No data for selected influencers to build the network graph. Try increasing the 'Max Influencers for Network Graph' slider or adjusting cluster selection.")
             else:
                 G, pos, cluster_map = cached_network_graph(graph_df_subset)
 
@@ -803,37 +815,47 @@ with tab3:
                     unique_clusters = sorted(list(set(node_colors)))
 
                     color_map = {c: i for i, c in enumerate(unique_clusters)}
-                    mapped_node_colors = [color_map[c] for c in node_colors]
+                    # Ensure enough colors are available
+                    color_palette = px.colors.qualitative.Set3 + px.colors.qualitative.Plotly
+                    extended_color_palette = color_palette * ((len(unique_clusters) // len(color_palette)) + 1)
+                    node_color_vals = [extended_color_palette[color_map[c]] for c in node_colors]
 
-                    if len(unique_clusters) == 1:
-                        marker_colorscale = px.colors.qualitative.Plotly[0]
-                        node_color_vals = [marker_colorscale] * len(mapped_node_colors)
-                        colorbar_dict = None
+                    # Calculate node sizes based on the number of *posts* for each influencer within the graph_df_subset
+                    influencer_post_counts = graph_df_subset['Influencer'].value_counts()
+                    max_node_size_display = 25 # Max desired visual size
+                    min_node_size_display = 10  # Min desired visual size
+                    
+                    if not influencer_post_counts.empty:
+                        # Normalize post counts for node sizing
+                        min_posts_val = influencer_post_counts.min()
+                        max_posts_val = influencer_post_counts.max()
+                        if max_posts_val == min_posts_val: # Avoid division by zero if all counts are same
+                            node_sizes_raw = [min_node_size_display + (max_node_size_display - min_node_size_display)/2] * len(G.nodes())
+                        else:
+                            node_sizes_raw = [
+                                min_node_size_display + (max_node_size_display - min_node_size_display) * ((influencer_post_counts.get(node, min_posts_val) - min_posts_val) / (max_posts_val - min_posts_val))
+                                for node in G.nodes()
+                            ]
                     else:
-                        color_palette = px.colors.qualitative.Set3
-                        extended_color_palette = color_palette * ((len(unique_clusters) // len(color_palette)) + 1)
+                        node_sizes_raw = [min_node_size_display] * len(G.nodes()) # Default size if no post counts
 
-                        marker_colors = [extended_color_palette[color_map[c]] for c in unique_clusters]
-
-                        node_color_vals = [extended_color_palette[color_map[c]] for c in node_colors]
-
-                        colorbar_dict = dict(
-                            title="Clusters",
-                            tickvals=[color_map[c] for c in unique_clusters],
-                            ticktext=[str(c) if c != -2 else 'Not Clustered' for c in unique_clusters], # Better label for -2
-                            x=1.02,
-                            xanchor="left",
-                            len=0.7
-                        )
+                    colorbar_dict = dict(
+                        title="Clusters",
+                        tickvals=[color_map[c] for c in unique_clusters],
+                        ticktext=[str(c) if c != -2 else 'Not Clustered' for c in unique_clusters], # Better label for -2
+                        x=1.02,
+                        xanchor="left",
+                        len=0.7
+                    )
 
                     node_trace = go.Scatter(
                         x=[pos[node][0] for node in G.nodes()],
                         y=[pos[node][1] for node in G.nodes()],
-                        text=[f"Influencer: {node}<br>Cluster: {cluster_map.get(node, 'N/A')}<br>Platform: {G.nodes[node].get('platform', 'N/A')}" for node in G.nodes()], # Added platform
+                        text=[f"Influencer: {node}<br>Posts in Graph: {influencer_post_counts.get(node, 0)}<br>Cluster: {cluster_map.get(node, 'N/A')}<br>Platform: {G.nodes[node].get('platform', 'N/A')}" for node in G.nodes()], # Added platform and post count to hover
                         mode='markers+text',
                         textposition="top center",
                         marker=dict(
-                            size=12,
+                            size=node_sizes_raw, # Use calculated sizes here
                             color=node_color_vals,
                             line=dict(width=2, color='darkblue'),
                             colorbar=colorbar_dict
@@ -843,7 +865,7 @@ with tab3:
 
                     st.write("This interactive graph visualizes the network of influencers, with nodes representing influencers and edges indicating interactions or shared narratives. Nodes are colored by their detected cluster.")
                     if len(selected_influencers) < len(seen_influencers):
-                         st.info(f"Displaying a subset of {len(G.nodes())} influencers in the network graph based on your filter and the 'Max Influencers for Network Graph' setting. Adjust the slider to include more influencers.")
+                         st.info(f"Displaying a subset of {len(G.nodes())} influencers in the network graph based on your filters and the 'Max Influencers for Network Graph' setting. Adjust the slider to include more influencers.")
                     fig_net = go.Figure(data=edge_trace + [node_trace],
                                         layout=go.Layout(
                                             title="User Network (Click & Drag to Explore)",
