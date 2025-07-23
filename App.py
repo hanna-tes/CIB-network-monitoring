@@ -50,7 +50,7 @@ def extract_original_text(text):
 @st.cache_data(show_spinner=False)
 def load_default_dataset():
     """Loads the default dataset from a specified CSV file or URL."""
-    file_name = "TogoJULYData - Sheet1.csv"
+    file_name = "TogoJULYData - Sheet1.csv" # Ensure this file is in the same directory as the script
     try:
         df = pd.read_csv(file_name)
         st.sidebar.success(f"✅ Default data loaded successfully from {file_name}.")
@@ -73,7 +73,7 @@ def preprocess_data(df, user_text_col, user_influencer_col, user_timestamp_col, 
     df = df.drop_duplicates().reset_index(drop=True)
 
     # Convert all column names to a consistent format (e.g., strip spaces, store original for display)
-    original_columns = df.columns.tolist() # Keep original column names
+    # No need to keep original columns, just strip for internal use
     df.columns = df.columns.str.strip() # Clean column names for internal processing
 
     # Helper to find column from candidates (case-insensitive)
@@ -240,11 +240,11 @@ def preprocess_data(df, user_text_col, user_influencer_col, user_timestamp_col, 
 def find_textual_similarities(df, threshold=0.85):
     """
     Computes cosine similarity between 'original_text' entries to find similar pairs,
-    including URLs for context.
+    including URLs and Platforms for context.
     """
-    clean_df = df[['original_text', 'Influencer', 'Timestamp', 'URL']].copy()
+    clean_df = df[['original_text', 'Influencer', 'Timestamp', 'URL', 'Platform']].copy()
     clean_df['original_text'] = clean_df['original_text'].astype(str)
-    clean_df = clean_df.dropna(subset=['original_text', 'Influencer', 'Timestamp'])
+    clean_df = clean_df.dropna(subset=['original_text', 'Influencer', 'Timestamp', 'Platform'])
     clean_df = clean_df[clean_df['original_text'].str.strip() != ""]
     texts = clean_df['original_text'].tolist()
 
@@ -278,18 +278,24 @@ def find_textual_similarities(df, threshold=0.85):
             narrative_snippet += "..."
         if not narrative_snippet.strip():
             narrative_snippet = "Empty/Cleaned Text"
+        
+        platforms_involved = sorted(list(set([row1['Platform'], row2['Platform']])))
+        platforms_involved_str = ", ".join(platforms_involved)
 
         similar_pairs.append({
             'text1': row1['original_text'],
             'influencer1': row1['Influencer'],
+            'platform1': row1['Platform'], # Added platform1
             'time1': row1['Timestamp'],
             'url1': row1['URL'],
             'text2': row2['original_text'],
             'influencer2': row2['Influencer'],
+            'platform2': row2['Platform'], # Added platform2
             'time2': row2['Timestamp'],
             'url2': row2['URL'],
             'similarity': round(sim_matrix[i, j], 3),
-            'shared_narrative': narrative_snippet
+            'shared_narrative': narrative_snippet,
+            'platforms_involved': platforms_involved_str # New column for summary
         })
     return pd.DataFrame(similar_pairs)
 
@@ -335,9 +341,14 @@ def build_user_interaction_graph(df):
                 G.add_edge(u1, u2, weight=1)
 
     all_influencers = df['Influencer'].dropna().unique().tolist()
+    # Also capture their primary platform for node attributes
+    influencer_platform_map = df.groupby('Influencer')['Platform'].apply(lambda x: x.mode()[0] if not x.mode().empty else 'Unknown').to_dict()
+
     for inf in all_influencers:
         if inf not in G.nodes():
             G.add_node(inf)
+        G.nodes[inf]['platform'] = influencer_platform_map.get(inf, 'Unknown')
+
 
     pos = nx.spring_layout(G, seed=42, k=0.1, iterations=50)
 
@@ -380,6 +391,8 @@ if data_source_option == "Use Default Data":
 elif data_source_option == "Upload CSV":
     uploaded_files = st.sidebar.file_uploader("Upload your CSV file(s)", type=["csv"], accept_multiple_files=True)
     if uploaded_files:
+        if len(uploaded_files) > 1:
+            st.sidebar.warning("You uploaded multiple files. Please ensure critical columns (like text, influencer, timestamp, URL) have consistent names across all files for accurate mapping and analysis.")
         dfs_from_upload = []
         for uploaded_file in uploaded_files:
             try:
@@ -411,6 +424,10 @@ column_selection_options = ["-- Select Column --"] + all_columns
 def get_default_index(col_name, options):
     try:
         lower_options = [opt.lower() for opt in options]
+        # First, try exact match, then case-insensitive match
+        if col_name in options:
+            return options.index(col_name)
+        
         if col_name.lower() in lower_options:
             return lower_options.index(col_name.lower()) # Return index of the first match
     except ValueError:
@@ -453,7 +470,7 @@ user_outlet_col = st.sidebar.selectbox(
 )
 
 # Warn if default selection is still present for critical columns
-if "-- Select Column --" in [user_text_col, user_influencer_col, user_timestamp_col, user_url_col]:
+if "-- Select Column --" in [user_text_col, user_influencer_col, user_timestamp_col]:
     st.sidebar.warning("Please ensure all required column mappings are selected from the dropdowns.")
     st.stop()
 
@@ -467,8 +484,8 @@ if df.empty:
     st.warning("No valid data available after preprocessing. Please check your data file and column mappings.")
     st.stop()
 
-# --- Sidebar Filters ---
-st.sidebar.header("🔍 Filters")
+# --- Sidebar Filters (Global Filters) ---
+st.sidebar.header("🔍 Global Filters (Apply to all tabs)")
 
 if not pd.api.types.is_datetime64_any_dtype(df['Timestamp']):
     st.error("Timestamp column is not in datetime format after preprocessing. Cannot apply date filter.")
@@ -494,22 +511,22 @@ else:
     start_dt = df['Timestamp'].min()
     end_dt = df['Timestamp'].max()
 
-available_platforms = df['Platform'].dropna().astype(str).unique().tolist()
-platforms = st.sidebar.multiselect(
+available_platforms_global = df['Platform'].dropna().astype(str).unique().tolist()
+platforms_global = st.sidebar.multiselect(
     "Platforms",
-    options=available_platforms,
-    default=available_platforms
+    options=available_platforms_global,
+    default=available_platforms_global
 )
 
-# Apply filters
-filtered_df = df[
+# Apply global filters
+filtered_df_global = df[
     (df['Timestamp'] >= start_dt) &
     (df['Timestamp'] <= end_dt) &
-    (df['Platform'].isin(platforms))
+    (df['Platform'].isin(platforms_global))
 ].copy()
 
-if filtered_df.empty:
-    st.warning("No data matches the selected filters. Please adjust the date range or platforms.")
+if filtered_df_global.empty:
+    st.warning("No data matches the selected global filters. Please adjust the date range or platforms.")
     st.stop()
 
 # Export button
@@ -518,7 +535,7 @@ st.sidebar.markdown("### 📄 Export Results")
 def convert_df(data):
     return data.to_csv(index=False).encode('utf-8')
 
-csv_data = convert_df(filtered_df)
+csv_data = convert_df(filtered_df_global)
 st.sidebar.download_button("Download Filtered Data", csv_data, "filtered_data.csv", "text/csv")
 
 # --- Tabs ---
@@ -533,60 +550,60 @@ with tab1:
     st.dataframe(df[['Influencer', 'Platform', 'URL']].head(10))
     st.markdown("---")
 
-    if not filtered_df.empty:
+    if not filtered_df_global.empty:
         st.write("This chart shows the top 10 influencers by the number of posts in the filtered dataset.")
-        top_influencers = filtered_df['Influencer'].value_counts().head(10)
+        top_influencers = filtered_df_global['Influencer'].value_counts().head(10)
         fig_src = px.bar(top_influencers, title="Top 10 Influencers", labels={'value': 'Posts', 'index': 'Influencer'})
         st.plotly_chart(fig_src, use_container_width=True)
 
-        if 'Platform' in filtered_df.columns and not filtered_df['Platform'].empty:
+        if 'Platform' in filtered_df_global.columns and not filtered_df_global['Platform'].empty:
             st.write("This chart displays the distribution of posts across all identified social media and media platforms in the dataset.")
-            all_platforms_counts = filtered_df['Platform'].value_counts()
+            all_platforms_counts = filtered_df_global['Platform'].value_counts()
             fig_platform = px.bar(all_platforms_counts, title="Post Distribution by Platform", labels={'value': 'Posts', 'index': 'Platform'})
             st.plotly_chart(fig_platform, use_container_width=True)
         else:
             st.info("No 'Platform' column found or no data for platforms. This typically happens if no URLs are present in the data.")
 
-        if 'Outlet' in filtered_df.columns and not filtered_df['Outlet'].empty:
+        if 'Outlet' in filtered_df_global.columns and not filtered_df_global['Outlet'].empty:
             st.write("This chart illustrates the top 10 media outlets or channels where content was published.")
-            top_outlets = filtered_df['Outlet'].value_counts().head(10)
+            top_outlets = filtered_df_global['Outlet'].value_counts().head(10)
             fig_outlet = px.bar(top_outlets, title="Top 10 Media Outlets/Channels", labels={'value': 'Posts', 'index': 'Outlet'})
             st.plotly_chart(fig_outlet, use_container_width=True)
         # Note: 'Channel' is no longer a primary target, as 'Outlet' handles this via mapping/fallbacks.
         # This elif block is kept for backward compatibility if 'Channel' exists and 'Outlet' does not.
-        elif 'Channel' in filtered_df.columns and not filtered_df['Channel'].empty:
+        elif 'Channel' in filtered_df_global.columns and not filtered_df_global['Channel'].empty:
             st.write("This chart illustrates the top 10 channels where content was published.")
-            top_channels = filtered_df['Channel'].value_counts().head(10)
+            top_channels = filtered_df_global['Channel'].value_counts().head(10)
             fig_chan = px.bar(top_channels, title="Top 10 Channels", labels={'value': 'Posts', 'index': 'Channel'})
             st.plotly_chart(fig_chan, use_container_width=True)
 
-        # Conditional display for Top 10 Hashtags
-        if 'Platform' in filtered_df.columns and not filtered_df['Platform'].empty:
-            unique_platforms = filtered_df['Platform'].dropna().unique()
-            # Check if 'Media' is the ONLY platform present in the filtered data
-            if len(unique_platforms) == 1 and 'Media' in unique_platforms:
-                st.info("Hashtag analysis skipped: Data primarily consists of 'Media' content where hashtags are often not applicable.")
+        # Conditional display for Top 10 Hashtags - only for non-Media platforms
+        if 'Platform' in filtered_df_global.columns and not filtered_df_global['Platform'].empty:
+            social_media_df = filtered_df_global[filtered_df_global['Platform'] != 'Media'].copy()
+            
+            if social_media_df.empty:
+                st.info("Hashtag analysis skipped: No social media (non-'Media') content found in the filtered data.")
             else:
-                if 'text' in filtered_df.columns and not filtered_df['text'].empty:
-                    st.write("This chart highlights the top 10 most frequently used hashtags in the filtered posts.")
-                    filtered_df['hashtags'] = filtered_df['text'].astype(str).str.findall(r'#\w+').apply(lambda x: [tag.lower() for tag in x])
+                if 'text' in social_media_df.columns and not social_media_df['text'].empty:
+                    st.write("This chart highlights the top 10 most frequently used hashtags, focusing on social media content where hashtags are typically relevant.")
+                    social_media_df['hashtags'] = social_media_df['text'].astype(str).str.findall(r'#\w+').apply(lambda x: [tag.lower() for tag in x])
 
-                    all_hashtags = [tag for tags_list in filtered_df['hashtags'] if isinstance(tags_list, list) for tag in tags_list if tags_list]
+                    all_hashtags = [tag for tags_list in social_media_df['hashtags'] if isinstance(tags_list, list) for tag in tags_list if tags_list]
 
                     if all_hashtags:
                         hashtag_counts = pd.Series(all_hashtags).value_counts().head(10)
-                        fig_ht = px.bar(hashtag_counts, title="Top 10 Hashtags", labels={'value': 'Frequency', 'index': 'Hashtag'})
+                        fig_ht = px.bar(hashtag_counts, title="Top 10 Hashtags (Social Media Only)", labels={'value': 'Frequency', 'index': 'Hashtag'})
                         st.plotly_chart(fig_ht, use_container_width=True)
                     else:
-                        st.info("No hashtags found in the filtered data 'text' column.")
+                        st.info("No hashtags found in the social media 'text' column.")
                 else:
-                    st.info("No 'text' column found or it's empty to extract hashtags.")
+                    st.info("No 'text' column found or it's empty to extract hashtags from social media content.")
         else:
             st.info("Cannot determine platform for hashtag analysis (no 'Platform' column or empty).")
 
 
         st.write("This area chart visualizes the daily volume of posts over the selected date range.")
-        time_series = filtered_df.set_index('Timestamp').resample('D').size()
+        time_series = filtered_df_global.set_index('Timestamp').resample('D').size()
         fig_ts = px.area(time_series, title="Daily Post Volume", labels={'value': 'Number of Posts', 'Timestamp': 'Date'})
         st.plotly_chart(fig_ts, use_container_width=True)
     else:
@@ -600,14 +617,27 @@ with tab2:
         When different accounts share very similar messages, it can suggest they are working together or amplifying the same ideas.
         A high similarity score (close to 1.0) means the texts are almost identical.
     """)
-    MAX_ROWS = st.sidebar.slider("Max posts to analyze for similarity", 100, 1000, 300)
+    
+    st.markdown("---")
+    st.subheader("Filters for Analysis (Tab 2 Only)")
+    available_platforms_analysis = filtered_df_global['Platform'].dropna().astype(str).unique().tolist()
+    platforms_analysis = st.multiselect(
+        "Platforms to include in Similarity Analysis:",
+        options=available_platforms_analysis,
+        default=available_platforms_analysis,
+        key="platforms_analysis_tab2" # Unique key for this widget
+    )
+    
+    analysis_df_filtered_by_platform = filtered_df_global[filtered_df_global['Platform'].isin(platforms_analysis)].copy()
+
+    MAX_ROWS_SIMILARITY = st.slider("Max posts to analyze for similarity (for performance)", 100, 1000, 300, key="max_rows_similarity")
     
     # Ensure original_text column is present and valid
-    if 'original_text' not in filtered_df.columns:
-        filtered_df['original_text'] = filtered_df['text'].apply(extract_original_text)
+    if 'original_text' not in analysis_df_filtered_by_platform.columns:
+        analysis_df_filtered_by_platform['original_text'] = analysis_df_filtered_by_platform['text'].apply(extract_original_text)
 
     # Create a fresh copy of filtered_df for analysis_df to ensure cache invalidation
-    analysis_df = filtered_df[filtered_df['original_text'].astype(str).str.strip() != ""].head(MAX_ROWS).copy()
+    analysis_df = analysis_df_filtered_by_platform[analysis_df_filtered_by_platform['original_text'].astype(str).str.strip() != ""].head(MAX_ROWS_SIMILARITY).copy()
 
     if analysis_df.empty:
         st.info("No valid text data available for similarity analysis after applying filters and row limit.")
@@ -619,7 +649,8 @@ with tab2:
             st.success(f"✅ Found {len(sim_df)} similar pairs.")
             narrative_summary = sim_df.groupby('shared_narrative').agg(
                 share_count=('similarity', 'count'),
-                influencers_involved=('influencer1', lambda x: ", ".join(x.astype(str).unique()[:5]) + ("..." if len(x.unique()) > 5 else ""))
+                influencers_involved=('influencer1', lambda x: ", ".join(x.astype(str).unique()[:5]) + ("..." if len(x.unique()) > 5 else "")),
+                platforms_involved=('platforms_involved', lambda x: ", ".join(sorted(list(set([p.strip() for sublist in x.tolist() for p in sublist.split(',')])))))
             ).sort_values(by='share_count', ascending=False).reset_index()
 
             st.markdown("### 🔝 Top Coordinated Narratives")
@@ -636,12 +667,12 @@ with tab2:
             )
             st.plotly_chart(fig_nar, use_container_width=True)
 
-            st.write("This table summarizes the top coordinated narratives, including the number of shares and involved influencers.")
+            st.write("This table summarizes the top coordinated narratives, including the number of shares, involved influencers, and the platforms they appeared on.")
             st.dataframe(narrative_summary)
             st.markdown("### 🔄 Full Similarity Pairs")
-            st.write("This table lists all detected pairs of similar texts, along with their influencers, timestamps, similarity scores, and links to the original posts for verification.")
+            st.write("This table lists all detected pairs of similar texts, along with their influencers, platforms, timestamps, similarity scores, and links to the original posts for verification.")
 
-            display_sim_df = sim_df.drop(columns=['shared_narrative'], errors='ignore').copy()
+            display_sim_df = sim_df[['text1', 'influencer1', 'platform1', 'time1', 'url1', 'text2', 'influencer2', 'platform2', 'time2', 'url2', 'similarity']].copy()
             display_sim_df['url1'] = display_sim_df['url1'].apply(lambda x: f'<a href="{x}" target="_blank">{x}</a>' if pd.notna(x) else '')
             display_sim_df['url2'] = display_sim_df['url2'].apply(lambda x: f'<a href="{x}" target="_blank">{x}</a>' if pd.notna(x) else '')
 
@@ -654,19 +685,32 @@ with tab2:
 with tab3:
     st.subheader("🚨 High-Risk Accounts & Networks")
 
-    max_influencers_graph = st.sidebar.slider(
-        "Max Influencers for Network Graph",
+    st.markdown("---")
+    st.subheader("Filters for Analysis (Tab 3 Only)")
+    available_platforms_network = filtered_df_global['Platform'].dropna().astype(str).unique().tolist()
+    platforms_network = st.multiselect(
+        "Platforms to include in Network & Risk Analysis:",
+        options=available_platforms_network,
+        default=available_platforms_network,
+        key="platforms_network_tab3" # Unique key for this widget
+    )
+    
+    network_df_filtered_by_platform = filtered_df_global[filtered_df_global['Platform'].isin(platforms_network)].copy()
+
+    max_influencers_graph = st.slider(
+        "Max Influencers for Network Graph (for performance)",
         min_value=10, max_value=200, value=50, step=10,
-        help="Limit the number of influencers displayed in the network graph to improve performance."
+        help="Limit the number of influencers displayed in the network graph to improve performance.",
+        key="max_influencers_graph"
     )
 
     try:
         # Ensure original_text column is present and valid
-        if 'original_text' not in filtered_df.columns:
-            filtered_df['original_text'] = filtered_df['text'].apply(extract_original_text)
+        if 'original_text' not in network_df_filtered_by_platform.columns:
+            network_df_filtered_by_platform['original_text'] = network_df_filtered_by_platform['text'].apply(extract_original_text)
 
         # Create a fresh copy of filtered_df for df_for_clustering to ensure cache invalidation
-        df_for_clustering = filtered_df[filtered_df['text'].astype(str).str.strip() != ""].copy()
+        df_for_clustering = network_df_filtered_by_platform[network_df_filtered_by_platform['text'].astype(str).str.strip() != ""].copy()
         
         if df_for_clustering.empty:
             st.info("No valid text data for clustering analysis.")
@@ -693,7 +737,7 @@ with tab3:
                 )
                 st.plotly_chart(fig_clust, use_container_width=True)
                 st.write("This table shows the influencers, their posts, timestamps, and their assigned cluster IDs.")
-                st.dataframe(clustered_df[['Influencer', 'text', 'Timestamp', 'cluster']])
+                st.dataframe(clustered_df[['Influencer', 'Platform', 'text', 'Timestamp', 'cluster']])
             else:
                 st.info("No significant clusters detected (all posts might be noise or too few posts for clustering).")
         else:
@@ -714,27 +758,31 @@ with tab3:
     """)
     try:
         # Ensure graph_df is always a fresh copy of the relevant DataFrame
-        graph_df = clustered_df.copy() if 'clustered_df' in locals() and not clustered_df.empty else filtered_df.copy()
+        graph_df = clustered_df.copy() if 'clustered_df' in locals() and not clustered_df.empty else network_df_filtered_by_platform.copy()
 
         if graph_df.empty or graph_df['Influencer'].dropna().empty:
             st.info("No valid influencer data to build the network graph.")
         else:
+            # Prioritize influencers in clusters, then by post count, up to max_influencers_graph
             clustered_influencers = graph_df[graph_df['cluster'] != -1]['Influencer'].value_counts().index.tolist()
             all_influencers_by_post = graph_df['Influencer'].value_counts().index.tolist()
 
             selected_influencers = []
             seen_influencers = set()
 
+            # Add clustered influencers first
             for inf in clustered_influencers:
                 if inf not in seen_influencers and len(selected_influencers) < max_influencers_graph:
                     selected_influencers.append(inf)
                     seen_influencers.add(inf)
 
+            # Fill up with other high-post-count influencers if space remains
             for inf in all_influencers_by_post:
                 if inf not in seen_influencers and len(selected_influencers) < max_influencers_graph:
                     selected_influencers.append(inf)
                     seen_influencers.add(inf)
-
+            
+            # Filter graph_df for only the selected influencers
             graph_df_subset = graph_df[graph_df['Influencer'].isin(selected_influencers)].copy()
 
             if graph_df_subset.empty:
@@ -751,7 +799,7 @@ with tab3:
                         x1, y1 = pos[edge[1]]
                         edge_trace.append(go.Scatter(x=[x0, x1], y=[y0, y1], mode='lines', line=dict(width=0.8, color='#888'), hoverinfo='none'))
 
-                    node_colors = [cluster_map.get(node, -2) for node in G.nodes()]
+                    node_colors = [cluster_map.get(node, -2) for node in G.nodes()] # Use -2 for non-clustered/noise
                     unique_clusters = sorted(list(set(node_colors)))
 
                     color_map = {c: i for i, c in enumerate(unique_clusters)}
@@ -772,7 +820,7 @@ with tab3:
                         colorbar_dict = dict(
                             title="Clusters",
                             tickvals=[color_map[c] for c in unique_clusters],
-                            ticktext=[str(c) for c in unique_clusters],
+                            ticktext=[str(c) if c != -2 else 'Not Clustered' for c in unique_clusters], # Better label for -2
                             x=1.02,
                             xanchor="left",
                             len=0.7
@@ -781,7 +829,7 @@ with tab3:
                     node_trace = go.Scatter(
                         x=[pos[node][0] for node in G.nodes()],
                         y=[pos[node][1] for node in G.nodes()],
-                        text=[f"Influencer: {node}<br>Cluster: {cluster_map.get(node, 'N/A')}" for node in G.nodes()],
+                        text=[f"Influencer: {node}<br>Cluster: {cluster_map.get(node, 'N/A')}<br>Platform: {G.nodes[node].get('platform', 'N/A')}" for node in G.nodes()], # Added platform
                         mode='markers+text',
                         textposition="top center",
                         marker=dict(
@@ -795,7 +843,7 @@ with tab3:
 
                     st.write("This interactive graph visualizes the network of influencers, with nodes representing influencers and edges indicating interactions or shared narratives. Nodes are colored by their detected cluster.")
                     if len(selected_influencers) < len(seen_influencers):
-                         st.info(f"Displaying a subset of {len(G.nodes())} influencers in the network graph based on your filter and the 'Max Influencers for Network Graph' setting. Adjust the slider in the sidebar to include more influencers.")
+                         st.info(f"Displaying a subset of {len(G.nodes())} influencers in the network graph based on your filter and the 'Max Influencers for Network Graph' setting. Adjust the slider to include more influencers.")
                     fig_net = go.Figure(data=edge_trace + [node_trace],
                                         layout=go.Layout(
                                             title="User Network (Click & Drag to Explore)",
