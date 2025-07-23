@@ -48,36 +48,32 @@ def extract_original_text(text):
 @st.cache_data(show_spinner=False)
 def load_default_dataset():
     """Loads the default dataset from a specified CSV file or URL."""
-    # Attempt to load from the user-provided file name first
     file_name = "TogoJULYData - Sheet1.csv"
     try:
         df = pd.read_csv(file_name)
-        st.sidebar.success(f"✅ Data loaded successfully from {file_name}.")
+        st.sidebar.success(f"✅ Default data loaded successfully from {file_name}.")
         return df
     except FileNotFoundError:
-        st.error(f"File not found: {file_name}. Please ensure the file is in the correct directory.")
+        st.error(f"File not found: {file_name}. Please ensure the default data file is in the correct directory.")
         return pd.DataFrame()
     except Exception as e:
-        st.error(f"Failed to load dataset from {file_name}: {e}")
+        st.error(f"Failed to load default dataset from {file_name}: {e}")
         return pd.DataFrame()
 
 # --- Preprocessing Function ---
-
 def preprocess_data(df):
     """
     Preprocesses the DataFrame: maps columns, creates 'text' column, cleans text,
     parses and localizes timestamps, and infers platform.
     """
     initial_rows = len(df)
-    #st.info(f"Initial rows in DataFrame: {initial_rows}")
+    st.info(f"Initial rows in DataFrame: {initial_rows}")
 
     # 1. Remove duplicates
     df = df.drop_duplicates().reset_index(drop=True)
-    #st.info(f"Rows after removing duplicates: {len(df)}")
+    st.info(f"Rows after removing duplicates: {len(df)}")
 
     # --- COLUMN MAPPING ---
-    # Define mapping for various column names to standardized names.
-    # Text content columns are kept with their original names for specific handling.
     col_map = {
         'Hit Sentence': 'Hit Sentence',
         'Headline': 'Headline',
@@ -102,7 +98,6 @@ def preprocess_data(df):
         'Input Name': 'InputSource',
     }
 
-    # Apply mapping to DataFrame columns
     original_cols = df.columns.tolist()
     new_columns_dict = {}
     for col in original_cols:
@@ -122,16 +117,14 @@ def preprocess_data(df):
             new_columns_dict[col] = col
 
     df = df.rename(columns=new_columns_dict)
-    df = df.loc[:,~df.columns.duplicated()] # Remove duplicate column names after rename
+    df = df.loc[:,~df.columns.duplicated()]
 
-    #st.info(f"Columns after initial mapping: {df.columns.tolist()}")
+    st.info(f"Columns after initial mapping: {df.columns.tolist()}")
 
     # --- Create 'text' column, prioritizing 'Hit Sentence' ---
-    # Initialize 'text' column with empty strings
     df['text'] = ''
     found_primary_text_col = False
 
-    # Prioritize 'Hit Sentence'
     if 'Hit Sentence' in df.columns:
         df['text'] = df['Hit Sentence'].astype(str).replace('nan', np.nan).fillna('')
         st.info("Prioritizing 'Hit Sentence' for the 'text' column content.")
@@ -139,7 +132,6 @@ def preprocess_data(df):
     else:
         st.warning("⚠️ 'Hit Sentence' column not found. Falling back to other text candidates.")
 
-    # If 'Hit Sentence' was not found or was entirely empty, try other candidates
     if not found_primary_text_col or df['text'].astype(str).str.strip().eq('').all():
         text_candidates_fallback = ['Opening Text', 'Headline', 'message', 'title', 'content', 'description', 'Body', 'FullText']
         for col in text_candidates_fallback:
@@ -147,22 +139,21 @@ def preprocess_data(df):
                 df['text'] = df[col].astype(str).replace('nan', np.nan).fillna('')
                 st.info(f"Used '{col}' as fallback for 'text' column.")
                 found_primary_text_col = True
-                break # Use the first non-empty fallback found
+                break
 
     if not found_primary_text_col:
         st.warning("⚠️ No suitable text column found among candidates. 'text' column might be empty.")
-        df['text'] = "" # Ensure it's a string column even if no text was found
+        df['text'] = ""
 
-    # Validate and clean the 'text' column content
-    df['text'] = df['text'].astype(str).replace('nan', np.nan) # Convert 'nan' strings to actual NaNs
-    initial_text_rows_before_drop = df['text'].count() # Count non-NaN values
+    df['text'] = df['text'].astype(str).replace('nan', np.nan)
+    initial_text_rows_before_drop = df['text'].count()
 
-    df = df.dropna(subset=['text']).reset_index(drop=True) # Drop rows where 'text' is NaN
-    #st.info(f"Rows with valid text after dropping NaNs: {len(df)} (was {initial_text_rows_before_drop})")
+    df = df.dropna(subset=['text']).reset_index(drop=True)
+    st.info(f"Rows with valid text after dropping NaNs: {len(df)} (was {initial_text_rows_before_drop})")
 
-    df['text'] = df['text'].astype(str) # Ensure it's string type after dropping NaNs
-    df = df[df['text'].str.strip() != ""].reset_index(drop=True) # Filter out empty strings
-    #st.info(f"Rows with non-empty text: {len(df)}")
+    df['text'] = df['text'].astype(str)
+    df = df[df['text'].str.strip() != ""].reset_index(drop=True)
+    st.info(f"Rows with non-empty text: {len(df)}")
 
     # --- Validate Required Columns (after text creation) ---
     required_cols = ["Influencer", "Timestamp", "text"]
@@ -182,7 +173,6 @@ def preprocess_data(df):
                 st.stop()
 
     # --- Timestamp Parsing ---
-    # Define common date formats for robust parsing
     date_formats = [
         '%b %d, %Y @ %H:%M:%S.%f', '%d-%b-%Y %I:%M%p', '%Y-%m-%d %H:%M:%S',
         '%d/%m/%Y %H:%M:%S', '%m/%d/%Y %H:%M:%S', '%Y-%m-%dT%H:%M:%SZ',
@@ -192,17 +182,16 @@ def preprocess_data(df):
     ]
 
     def parse_timestamp_robust(timestamp):
-        """Attempts to parse a timestamp string into a datetime object using multiple formats."""
         if pd.isna(timestamp):
             return pd.NaT
         if isinstance(timestamp, pd.Timestamp):
             return timestamp
-        try: # Try direct conversion first
+        try:
             parsed = pd.to_datetime(timestamp, errors='coerce')
             if pd.notna(parsed): return parsed
         except (ValueError, TypeError): pass
 
-        for fmt in date_formats: # Then try specific formats
+        for fmt in date_formats:
             try:
                 parsed = pd.to_datetime(timestamp, format=fmt, errors='coerce')
                 if pd.notna(parsed): return parsed
@@ -212,7 +201,6 @@ def preprocess_data(df):
     df['Timestamp'] = df['Timestamp'].apply(parse_timestamp_robust)
 
     def localize_to_utc(dt):
-        """Localizes a datetime object to UTC, assuming naive datetimes are UTC."""
         if pd.isna(dt): return dt
         if dt.tzinfo is None: return dt.tz_localize('UTC')
         else: return dt.tz_convert('UTC')
@@ -220,10 +208,10 @@ def preprocess_data(df):
     df['Timestamp'] = df['Timestamp'].apply(localize_to_utc)
 
     valid_ts = df['Timestamp'].notna().sum()
-    #st.info(f"✅ Parsed {valid_ts} valid timestamps.")
+    st.info(f"✅ Parsed {valid_ts} valid timestamps.")
 
     df = df.dropna(subset=["Timestamp"]).reset_index(drop=True)
-    #st.info(f"Rows after dropping invalid timestamps: {len(df)}")
+    st.info(f"Rows after dropping invalid timestamps: {len(df)}")
 
     # --- Create 'Platform' from URL ---
     url_cols = ['URL', 'url', 'webVideoUrl', 'link', 'post_url']
@@ -249,12 +237,12 @@ def preprocess_data(df):
         text = re.sub(r"\\n|\\r|\\t", " ", text)
         text = re.sub(r"rt @\S+", "", text)
         text = re.sub(r"qt @\S+", "", text)
-        text = text.lower() # Convert to lower case after removing URLs and RT/QT
+        text = text.lower()
         text = re.sub(r'\s+', ' ', text).strip()
         return text
 
     df['text'] = df['text'].apply(clean_text_final)
-    #st.info(f"Rows after final text cleaning: {len(df)}")
+    st.info(f"Rows after final text cleaning: {len(df)}")
 
     # --- Extract original text (for similarity, removes RT specifically) ---
     df['original_text'] = df['text'].apply(extract_original_text)
@@ -334,7 +322,7 @@ def cached_clustering(_df):
     try:
         from modules.clustering_utils import cluster_texts
         if 'text' not in _df.columns:
-            _df['text'] = _df['original_text'] # Fallback if 'text' was dropped
+            _df['text'] = _df['original_text']
         _df['text'] = _df['text'].astype(str)
         return cluster_texts(_df)
     except Exception as e:
@@ -374,14 +362,30 @@ def cached_network_graph(_df):
         cluster_map = {n: 0 for n in G.nodes}
         return G, pos, cluster_map
 
-# --- Load Data from URL ---
+# --- Data Source Selection ---
 st.sidebar.header("📥 Data Source")
-st.sidebar.info("Loading data from default file...")
-df = load_default_dataset()
+data_source_option = st.sidebar.radio(
+    "Choose data source:",
+    ("Use Default Data", "Upload CSV")
+)
 
-# Exit if no data
+df = pd.DataFrame() # Initialize df to an empty DataFrame
+
+if data_source_option == "Use Default Data":
+    df = load_default_dataset()
+elif data_source_option == "Upload CSV":
+    uploaded_file = st.sidebar.file_uploader("Upload your CSV file", type=["csv"])
+    if uploaded_file is not None:
+        try:
+            df = pd.read_csv(uploaded_file)
+            st.sidebar.success("✅ CSV uploaded successfully!")
+        except Exception as e:
+            st.error(f"Error reading CSV file: {e}")
+            df = pd.DataFrame() # Ensure df is empty if an error occurs
+
+# Exit if no data after selection
 if df is None or df.empty:
-    st.warning("No data available. Please check the data file or upload a new one.")
+    st.warning("No data available. Please select a data source and ensure it's valid.")
     st.stop()
 
 # --- Preprocess ---
@@ -396,7 +400,6 @@ if df.empty:
 # --- Sidebar Filters ---
 st.sidebar.header("🔍 Filters")
 
-# Ensure Timestamp column is datetime before finding min/max
 if not pd.api.types.is_datetime64_any_dtype(df['Timestamp']):
     st.error("Timestamp column is not in datetime format after preprocessing. Cannot apply date filter.")
     st.stop()
@@ -404,7 +407,6 @@ if not pd.api.types.is_datetime64_any_dtype(df['Timestamp']):
 min_date = df['Timestamp'].min().date()
 max_date = df['Timestamp'].max().date()
 
-# Date range filter
 selected_date_range = st.sidebar.date_input(
     "Date Range",
     value=[min_date, max_date],
@@ -418,7 +420,7 @@ if len(selected_date_range) == 2:
 elif len(selected_date_range) == 1:
     start_dt = pd.Timestamp(selected_date_range[0], tz='UTC')
     end_dt = start_dt + pd.Timedelta(days=1) - pd.Timedelta(microseconds=1)
-else: # Fallback if no dates selected or other unexpected behavior
+else:
     start_dt = df['Timestamp'].min()
     end_dt = df['Timestamp'].max()
 
@@ -460,7 +462,6 @@ with tab1:
         fig_src = px.bar(top_influencers, title="Top 10 Influencers", labels={'value': 'Posts', 'index': 'Influencer'})
         st.plotly_chart(fig_src, use_container_width=True)
 
-        # Plot for Platforms
         if 'Platform' in filtered_df.columns and not filtered_df['Platform'].empty:
             top_platforms = filtered_df['Platform'].value_counts().head(10)
             fig_platform = px.bar(top_platforms, title="Top 10 Platforms", labels={'value': 'Posts', 'index': 'Platform'})
@@ -468,20 +469,14 @@ with tab1:
         else:
             st.info("No 'Platform' column found or no data for platforms. This typically happens if no URLs are present in the data.")
 
-        # Channel plot (message commented out as requested)
         if 'Channel' in filtered_df.columns:
             top_channels = filtered_df['Channel'].value_counts().head(10)
             fig_chan = px.bar(top_channels, title="Top 10 Channels", labels={'value': 'Posts', 'index': 'Channel'})
             st.plotly_chart(fig_chan, use_container_width=True)
-        # else:
-        #     st.info("No 'Channel' column found in data.") # Commented out as requested
 
-        # Hashtag Extraction
         if 'text' in filtered_df.columns and not filtered_df['text'].empty:
-            # Ensure 'text' column is string type before finding hashtags
             filtered_df['hashtags'] = filtered_df['text'].astype(str).str.findall(r'#\w+').apply(lambda x: [tag.lower() for tag in x])
 
-            # Filter out entries where 'hashtags' column might be empty list or NaN
             all_hashtags = [tag for tags_list in filtered_df['hashtags'] if isinstance(tags_list, list) for tag in tags_list if tags_list]
 
             if all_hashtags:
@@ -503,11 +498,9 @@ with tab1:
 with tab2:
     st.subheader("🧠 Narrative Detection & Coordination")
     MAX_ROWS = st.sidebar.slider("Max posts to analyze for similarity", 100, 1000, 300)
-    # Ensure 'original_text' is ready for analysis
     if 'original_text' not in filtered_df.columns:
         filtered_df['original_text'] = filtered_df['text'].apply(extract_original_text)
 
-    # Filter out empty or NaN 'original_text' entries before slicing
     analysis_df = filtered_df[filtered_df['original_text'].astype(str).str.strip() != ""].head(MAX_ROWS).copy()
 
     if analysis_df.empty:
@@ -546,15 +539,13 @@ with tab2:
 with tab3:
     st.subheader("🚨 High-Risk Accounts & Networks")
     try:
-        # Ensure 'original_text' is available for clustering
         if 'original_text' not in filtered_df.columns:
             filtered_df['original_text'] = filtered_df['text'].apply(extract_original_text)
 
-        # Filter out empty or NaN 'text' entries before clustering attempt
         df_for_clustering = filtered_df[filtered_df['text'].astype(str).str.strip() != ""].copy()
         if df_for_clustering.empty:
             st.info("No valid text data for clustering analysis.")
-            clustered_df = pd.DataFrame() # Ensure clustered_df is defined
+            clustered_df = pd.DataFrame()
         else:
             clustered_df = cached_clustering(df_for_clustering)
             if 'cluster' not in clustered_df.columns:
@@ -584,7 +575,6 @@ with tab3:
 
     st.markdown("### 🕸️ User Interaction Network")
     try:
-        # Pass the original filtered_df if clustering failed or is empty
         graph_df = clustered_df if 'clustered_df' in locals() and not clustered_df.empty else filtered_df
 
         if graph_df.empty or graph_df['Influencer'].dropna().empty:
