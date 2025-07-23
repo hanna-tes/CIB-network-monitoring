@@ -56,14 +56,16 @@ def load_default_dataset():
         return pd.DataFrame()
 
 # --- Preprocessing Function ---
+
 def preprocess_data(df):
     """
     Preprocesses the DataFrame: maps columns, cleans text, parses timestamps.
     """
+
     # 1. Remove duplicates
     df = df.drop_duplicates().reset_index(drop=True)
 
-    # --- COLUMN MAPPING  ---
+    # --- COLUMN MAPPING ---
     col_map = {
         # 💬 Text Content
         'Hit Sentence': 'text',
@@ -124,7 +126,7 @@ def preprocess_data(df):
     df.columns = new_columns
     df = df.loc[:, ~df.columns.duplicated()]
 
-    # --- Validate Required Columns (after mapping) ---
+    # --- Validate Required Columns ---
     required_cols = ["Influencer", "Timestamp", "text"]
     missing_cols = [col for col in required_cols if col not in df.columns]
 
@@ -147,7 +149,6 @@ def preprocess_data(df):
                     st.stop()
                 elif col == "Timestamp":
                     df['Timestamp'] = pd.Timestamp.now()
-        # Final validation
         for col in required_cols:
             if col not in df.columns:
                 st.error(f"🛑 Still missing: '{col}' → Cannot continue.")
@@ -155,9 +156,7 @@ def preprocess_data(df):
 
     # --- Clean 'text' column ---
     df = df[df['text'].notna()]
-    # Ensure 'text' is string before applying .str operations
     df['text'] = df['text'].astype(str)
-    # Now it's safe to strip and filter empty strings
     df = df[df['text'].str.strip() != ""]
     df = df.reset_index(drop=True)
 
@@ -180,6 +179,8 @@ def preprocess_data(df):
     def parse_timestamp(timestamp):
         if pd.isna(timestamp):
             return pd.NaT
+        if isinstance(timestamp, pd.Timestamp):
+            return timestamp
         for fmt in date_formats:
             try:
                 parsed = pd.to_datetime(timestamp, format=fmt, errors='coerce')
@@ -191,7 +192,6 @@ def preprocess_data(df):
 
     df['Timestamp'] = df['Timestamp'].apply(parse_timestamp)
 
-    # Convert to UTC
     def localize_to_utc(dt):
         if pd.isna(dt):
             return dt
@@ -202,7 +202,13 @@ def preprocess_data(df):
 
     df['Timestamp'] = df['Timestamp'].apply(localize_to_utc)
 
-    # --- Clean Text ---
+    valid_ts = df['Timestamp'].notna().sum()
+    st.info(f"✅ Parsed {valid_ts} valid timestamps.")
+
+    # Optional: Drop rows with invalid timestamps
+    df = df.dropna(subset=["Timestamp"]).reset_index(drop=True)
+
+    # --- Clean Text Further ---
     def clean_text(text):
         if not isinstance(text, str):
             return ""
@@ -216,6 +222,8 @@ def preprocess_data(df):
         return text
 
     df['text'] = df['text'].apply(clean_text)
+
+    return df
 
     # --- Create 'Platform' from URL ---
     url_cols = ['URL', 'url', 'webVideoUrl', 'link', 'post_url']
