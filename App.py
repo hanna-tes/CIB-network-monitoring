@@ -67,11 +67,11 @@ def preprocess_data(df):
     parses and localizes timestamps, and infers platform.
     """
     initial_rows = len(df)
-    st.info(f"Initial rows in DataFrame: {initial_rows}")
+    #st.info(f"Initial rows in DataFrame: {initial_rows}")
 
     # 1. Remove duplicates
     df = df.drop_duplicates().reset_index(drop=True)
-    st.info(f"Rows after removing duplicates: {len(df)}")
+    #st.info(f"Rows after removing duplicates: {len(df)}")
 
     # --- COLUMN MAPPING ---
     col_map = {
@@ -119,7 +119,7 @@ def preprocess_data(df):
     df = df.rename(columns=new_columns_dict)
     df = df.loc[:,~df.columns.duplicated()]
 
-    st.info(f"Columns after initial mapping: {df.columns.tolist()}")
+    #st.info(f"Columns after initial mapping: {df.columns.tolist()}")
 
     # --- Create 'text' column, prioritizing 'Hit Sentence' ---
     df['text'] = ''
@@ -127,7 +127,7 @@ def preprocess_data(df):
 
     if 'Hit Sentence' in df.columns:
         df['text'] = df['Hit Sentence'].astype(str).replace('nan', np.nan).fillna('')
-        st.info("Prioritizing 'Hit Sentence' for the 'text' column content.")
+        #st.info("Prioritizing 'Hit Sentence' for the 'text' column content.")
         found_primary_text_col = True
     else:
         st.warning("⚠️ 'Hit Sentence' column not found. Falling back to other text candidates.")
@@ -149,11 +149,11 @@ def preprocess_data(df):
     initial_text_rows_before_drop = df['text'].count()
 
     df = df.dropna(subset=['text']).reset_index(drop=True)
-    st.info(f"Rows with valid text after dropping NaNs: {len(df)} (was {initial_text_rows_before_drop})")
+    #st.info(f"Rows with valid text after dropping NaNs: {len(df)} (was {initial_text_rows_before_drop})")
 
     df['text'] = df['text'].astype(str)
     df = df[df['text'].str.strip() != ""].reset_index(drop=True)
-    st.info(f"Rows with non-empty text: {len(df)}")
+    #st.info(f"Rows with non-empty text: {len(df)}")
 
     # --- Validate Required Columns (after text creation) ---
     required_cols = ["Influencer", "Timestamp", "text"]
@@ -208,10 +208,10 @@ def preprocess_data(df):
     df['Timestamp'] = df['Timestamp'].apply(localize_to_utc)
 
     valid_ts = df['Timestamp'].notna().sum()
-    st.info(f"✅ Parsed {valid_ts} valid timestamps.")
+    #st.info(f"✅ Parsed {valid_ts} valid timestamps.")
 
     df = df.dropna(subset=["Timestamp"]).reset_index(drop=True)
-    st.info(f"Rows after dropping invalid timestamps: {len(df)}")
+    #st.info(f"Rows after dropping invalid timestamps: {len(df)}")
 
     # --- Create 'Platform' from URL ---
     url_cols = ['URL', 'url', 'webVideoUrl', 'link', 'post_url']
@@ -226,7 +226,7 @@ def preprocess_data(df):
         df['Platform'] = df['URL'].apply(infer_platform_from_url)
     else:
         df['Platform'] = "Unknown"
-        st.sidebar.warning("⚠️ No URL column found → all platforms marked as 'Unknown'")
+        #st.sidebar.warning("⚠️ No URL column found → all platforms marked as 'Unknown'")
 
     # --- Clean Text Further (after 'text' column is finalized) ---
     def clean_text_final(text):
@@ -242,7 +242,7 @@ def preprocess_data(df):
         return text
 
     df['text'] = df['text'].apply(clean_text_final)
-    st.info(f"Rows after final text cleaning: {len(df)}")
+    #st.info(f"Rows after final text cleaning: {len(df)}")
 
     # --- Extract original text (for similarity, removes RT specifically) ---
     df['original_text'] = df['text'].apply(extract_original_text)
