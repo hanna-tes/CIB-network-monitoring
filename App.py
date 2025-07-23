@@ -355,7 +355,7 @@ def cached_similarity_analysis(_df, threshold=0.85):
 @st.cache_data(show_spinner="🧩 Clustering texts...")
 def cached_clustering(_df):
     """
-    Performs text clustering using the integrated DBSCAN clustering function.
+    Performstext clustering using the integrated DBSCAN clustering function.
     """
     return cluster_texts(_df)
 
@@ -407,20 +407,19 @@ all_columns = df.columns.tolist()
 # Add a default selection option at the beginning
 column_selection_options = ["-- Select Column --"] + all_columns
 
-# --- Flexible Column Mapping Input ---
-st.sidebar.header("⚙️ Column Mappings")
-st.sidebar.markdown("Please select the correct columns from your data:")
-
-# Function to get default index for selectbox
+# Function to get default index for selectbox (case-insensitive)
 def get_default_index(col_name, options):
     try:
-        # Check if the desired column name (case-insensitive) is in the options
         lower_options = [opt.lower() for opt in options]
         if col_name.lower() in lower_options:
             return lower_options.index(col_name.lower()) # Return index of the first match
     except ValueError:
         pass
     return 0 # Default to "-- Select Column --"
+
+# --- Flexible Column Mapping Input ---
+st.sidebar.header("⚙️ Column Mappings")
+st.sidebar.markdown("Please select the correct columns from your data:")
 
 user_text_col = st.sidebar.selectbox(
     "Main Text Column",
@@ -432,28 +431,28 @@ user_influencer_col = st.sidebar.selectbox(
     "Influencer/Author Column",
     options=column_selection_options,
     index=get_default_index("Influencer", column_selection_options),
-    help="Select the column identifying the influencer or author (e.g., 'username', 'author', 'Source', 'media_name', 'Influencer', 'channel name', 'authorMeta/name')."
+    help="Select the column identifying the influencer or author (e.g., 'username', 'author', 'Source', 'authorMeta/name', 'Influencer')."
 )
 user_timestamp_col = st.sidebar.selectbox(
     "Timestamp Column",
     options=column_selection_options,
     index=get_default_index("Timestamp", column_selection_options),
-    help="Select the column containing the date and time of the post (e.g., 'Date', 'published_date', 'created_at', 'publish_date')."
+    help="Select the column containing the date and time of the post (e.g., 'Date', 'publish_date', 'created_at')."
 )
 user_url_col = st.sidebar.selectbox(
     "URL Column",
     options=column_selection_options,
     index=get_default_index("URL", column_selection_options),
-    help="Select the column with the URL of the post (e.g., 'link', 'post_url', 'webVideoUrl', 'URL'). This is used to infer the platform."
+    help="Select the column with the URL of the post (e.g., 'link', 'post_url', 'webVideoUrl', 'URL', 'media_url', 'url'). This is used to infer the platform."
 )
 user_outlet_col = st.sidebar.selectbox(
     "Media Outlet/Channel Column (Optional)",
     options=column_selection_options,
     index=get_default_index("Outlet", column_selection_options),
-    help="Select the column for media outlet or channel. (e.g., 'Twitter', 'TikTok', 'Media outlet', 'Telegram', 'Facebook'). This can be used as a fallback for Influencer if no specific influencer column is found."
+    help="Select the column for media outlet or channel. (e.g., 'Twitter', 'Facebook', 'Media outlet', 'TikTok', 'Telegram') This can be used as a fallback for Influencer if no specific influencer column is found."
 )
 
-# Warn if default selection is still present
+# Warn if default selection is still present for critical columns
 if "-- Select Column --" in [user_text_col, user_influencer_col, user_timestamp_col, user_url_col]:
     st.sidebar.warning("Please ensure all required column mappings are selected from the dropdowns.")
     st.stop()
@@ -587,9 +586,12 @@ with tab1:
 with tab2:
     st.subheader("🧠 Narrative Detection & Coordination")
     MAX_ROWS = st.sidebar.slider("Max posts to analyze for similarity", 100, 1000, 300)
+    
+    # Ensure original_text column is present and valid
     if 'original_text' not in filtered_df.columns:
         filtered_df['original_text'] = filtered_df['text'].apply(extract_original_text)
 
+    # Create a fresh copy of filtered_df for analysis_df to ensure cache invalidation
     analysis_df = filtered_df[filtered_df['original_text'].astype(str).str.strip() != ""].head(MAX_ROWS).copy()
 
     if analysis_df.empty:
@@ -644,10 +646,13 @@ with tab3:
     )
 
     try:
+        # Ensure original_text column is present and valid
         if 'original_text' not in filtered_df.columns:
             filtered_df['original_text'] = filtered_df['text'].apply(extract_original_text)
 
+        # Create a fresh copy of filtered_df for df_for_clustering to ensure cache invalidation
         df_for_clustering = filtered_df[filtered_df['text'].astype(str).str.strip() != ""].copy()
+        
         if df_for_clustering.empty:
             st.info("No valid text data for clustering analysis.")
             clustered_df = pd.DataFrame()
@@ -684,7 +689,8 @@ with tab3:
 
     st.markdown("### 🕸️ User Interaction Network")
     try:
-        graph_df = clustered_df if 'clustered_df' in locals() and not clustered_df.empty else filtered_df
+        # Ensure graph_df is always a fresh copy of the relevant DataFrame
+        graph_df = clustered_df.copy() if 'clustered_df' in locals() and not clustered_df.empty else filtered_df.copy()
 
         if graph_df.empty or graph_df['Influencer'].dropna().empty:
             st.info("No valid influencer data to build the network graph.")
