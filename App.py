@@ -545,7 +545,7 @@ tab1, tab2, tab3 = st.tabs(["📊 Overview", "🔍 Analysis", "🌐 Network & Ri
 with tab1:
     st.subheader("📌 Summary Statistics")
 
-    st.markdown("### 🔬 Preprocessed Data Sample (for debugging column values)")
+    st.markdown("### 🔬 Preprocessed Data Sample")
     st.write("Check the values in 'Influencer', 'Platform', and 'URL' columns below to ensure they are correctly identified after preprocessing.")
     st.dataframe(df[['Influencer', 'Platform', 'URL']].head(10))
     st.markdown("---")
