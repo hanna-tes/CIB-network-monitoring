@@ -107,7 +107,7 @@ def preprocess_data(df, user_text_col, user_influencer_col, user_timestamp_col, 
     else:
         # 2. Fallback to predefined influencer candidates
         influencer_candidates_fallback = [
-            'Influencer', 'author', 'username', 'user', 'authorMeta/name', 'creator', 'authorname', 'Source'
+            'Influencer', 'author', 'username', 'user', 'authorMeta/name', 'creator', 'authorname', 'Source', 'media_name'
         ]
         found_influencer_fallback = False
         for col_name in influencer_candidates_fallback:
@@ -146,7 +146,7 @@ def preprocess_data(df, user_text_col, user_influencer_col, user_timestamp_col, 
     # 2. Fallback to predefined timestamp columns if user-defined failed or not provided/empty
     if df['Timestamp'].isna().all(): # If all values are NaT after user-defined attempt
         st.warning("⚠️ User-defined Timestamp column failed or not found. Falling back to other date candidates.")
-        date_candidates_fallback = ['Date', 'createTimeISO', 'published_date', 'pubDate', 'created_at', 'Alternate Date Format']
+        date_candidates_fallback = ['Date', 'createTimeISO', 'published_date', 'pubDate', 'created_at', 'Alternate Date Format', 'publish_date']
         for col_name in date_candidates_fallback:
             if col_name in df.columns:
                 df['Timestamp'] = pd.to_datetime(df[col_name], errors='coerce')
@@ -433,10 +433,10 @@ if df is None or df.empty:
 st.sidebar.header("⚙️ Column Mappings")
 st.sidebar.markdown("Specify the column names from your data for key fields.")
 
-user_text_col = st.sidebar.text_input("Main Text Column", value="text", help="e.g., 'message', 'content', 'FullText', 'text'")
-user_influencer_col = st.sidebar.text_input("Influencer/Author Column", value="Influencer", help="e.g., 'username', 'author', 'Source'")
-user_timestamp_col = st.sidebar.text_input("Timestamp Column", value="Timestamp", help="e.g., 'Date', 'published_date', 'created_at'")
-user_url_col = st.sidebar.text_input("URL Column", value="URL", help="e.g., 'link', 'post_url', 'url'")
+user_text_col = st.sidebar.text_input("Main Text Column", value="text", help="e.g., 'message', 'content', 'FullText', 'text', 'Hit Sentence'")
+user_influencer_col = st.sidebar.text_input("Influencer/Author Column", value="Influencer", help="e.g., 'username', 'author', 'Source', 'authorMeta/name','media_name'")
+user_timestamp_col = st.sidebar.text_input("Timestamp Column", value="Timestamp", help="e.g., 'Date', 'published_date', 'created_at', 'publish_date'")
+user_url_col = st.sidebar.text_input("URL Column", value="URL", help="e.g., 'link', 'post_url', 'url', 'media_url', 'webVideoUrl', 'URL'")
 user_outlet_col = st.sidebar.text_input("Media Outlet/Channel Column (Optional)", value="Outlet", help="e.g., 'media_name', 'channeltitle', 'source'")
 
 
