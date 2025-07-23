@@ -49,7 +49,7 @@ def load_default_dataset():
     url = "https://raw.githubusercontent.com/hanna-tes/CIB-network-monitoring/refs/heads/main/TogoJULYData%20-%20Sheet1.csv"
     try:
         df = pd.read_csv(url)
-        st.sidebar.success("✅ Data loaded from default URL")
+        st.sidebar.success("✅ default data loaded")
         return df
     except Exception as e:
         st.error(f"Failed to load default dataset: {e}")
@@ -153,10 +153,12 @@ def preprocess_data(df):
                 st.error(f"🛑 Still missing: '{col}' → Cannot continue.")
                 st.stop()
 
-    # --- Clean 'text' column (now that it exists) ---
+    # --- Clean 'text' column ---
     df = df[df['text'].notna()]
-    df = df[df['text'].str.strip() != ""]
+    # Ensure 'text' is string before applying .str operations
     df['text'] = df['text'].astype(str)
+    # Now it's safe to strip and filter empty strings
+    df = df[df['text'].str.strip() != ""]
     df = df.reset_index(drop=True)
 
     # --- Timestamp Parsing ---
