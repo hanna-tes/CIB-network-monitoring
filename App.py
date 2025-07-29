@@ -136,31 +136,67 @@ def combine_social_media_data(
 
 # --- Preprocessing Function ---
 def preprocess_data(df):
-    """Preprocesses the DataFrame: maps columns, cleans text, parses timestamps."""
-    if df.empty:
-        return df
-
+    """Preprocesses the DataFrame with early column mapping."""
     df = df.drop_duplicates().reset_index(drop=True)
 
+    # --- EARLY COLUMN MAPPING ---
     col_map = {
-        'Hit Sentence': 'text', 'Headline': 'text', 'message': 'text',
-        'title': 'text', 'content': 'text', 'description': 'text',
-        'opening text': 'text', 'Body': 'text', 'FullText': 'text',
-        'Influencer': 'Influencer', 'author': 'Influencer', 'username': 'Influencer',
-        'user': 'Influencer', 'authorMeta/name': 'Influencer', 'creator': 'Influencer',
+        # 💬 Text Content
+        'Hit Sentence': 'text',
+        'Headline': 'text',
+        'message': 'text',
+        'title': 'text',
+        'content': 'text',
+        'description': 'text',
+        'opening text': 'text',
+        'Opening Text': 'text',
+        'Body': 'text',
+        'FullText': 'text',
+
+        # 👤 Influencer / Author
+        'Influencer': 'Influencer',
+        'author': 'Influencer',
+        'username': 'Influencer',
+        'user': 'Influencer',
+        'authorMeta/name': 'Influencer',
+        'creator': 'Influencer',
         'authorname': 'Influencer',
-        'Date': 'Timestamp', 'createTimeISO': 'Timestamp', 'published_date': 'Timestamp',
-        'pubDate': 'Timestamp', 'created_at': 'Timestamp', 'Alternate Date Format': 'Timestamp',
-        'URL': 'URL', 'url': 'URL', 'webVideoUrl': 'URL', 'link': 'URL', 'post_url': 'URL',
-        'media_name': 'Outlet', 'channeltitle': 'Channel', 'source': 'Outlet',
+        'Source': 'Influencer',  # Add this fallback
+        'media_name': 'Influencer',  # Use outlet as influencer if needed
+        'channeltitle': 'Influencer',
+
+        # 📅 Timestamps
+        'Date': 'Timestamp',
+        'createTimeISO': 'Timestamp',
+        'publish_date': 'Timestamp',
+        'pubDate': 'Timestamp',
+        'created_at': 'Timestamp',
+        'Alternate Date Format': 'Timestamp',
+        'Time': 'Timestamp',
+
+        # 🔗 URL Variants
+        'URL': 'URL',
+        'url': 'URL',
+        'webVideoUrl': 'URL',
+        'link': 'URL',
+        'post_url': 'URL',
+        'media_url': 'URL',
+
+        # 📺 Media & Channel Metadata
+        'media_name': 'Outlet',
+        'channeltitle': 'Channel',
+        'source': 'MediaOutlet',
         'Input Name': 'InputSource',
     }
 
+    # Apply mapping
     new_columns = []
     for col in df.columns:
+        # Direct match
         if col in col_map:
             new_columns.append(col_map[col])
             continue
+        # Case-insensitive + normalized match
         normalized_col = col.lower().replace(" ", "").replace("_", "").replace("-", "")
         matched = None
         for key, target in col_map.items():
@@ -172,20 +208,50 @@ def preprocess_data(df):
     df.columns = new_columns
     df = df.loc[:, ~df.columns.duplicated()]
 
+    # --- Validate Required Columns (after mapping) ---
     required_cols = ["Influencer", "Timestamp", "text"]
     missing_cols = [col for col in required_cols if col not in df.columns]
 
     if missing_cols:
-        st.error(f"❌ Missing required columns: {missing_cols}")
-        for col in missing_cols:
-            st.info(f"💡 Please ensure your data has a '{col}' field.")
-        st.stop()
+        st.error(f"❌ Missing required columns after mapping: {missing_cols}")
 
+        # Suggestions
+        suggestions = {
+            'Influencer': ['source', 'author', 'user', 'username', 'media_name','Influencer'],
+            'Timestamp': ['date', 'time', 'created_at', 'publish_date'],
+            'text': ['message', 'content', 'body', 'headline', 'hit sentence', 'opening text','text']
+        }
+        for col in missing_cols:
+            close_matches = [
+                c for c in df.columns
+                if any(sugg in c.lower().replace(" ", "").replace("_", "") for sugg in suggestions.get(col, []))
+            ]
+            if close_matches:
+                st.info(f"💡 Did you mean to map `{close_matches[0]}` → `{col}`?")
+            else:
+                if col == "Influencer":
+                    df['Influencer'] = "Unknown_User"
+                    st.warning("⚠️ Using 'Unknown_User' for Influencer.")
+                elif col == "text":
+                    st.error("🚫 No text column found. Cannot proceed.")
+                    st.stop()
+                elif col == "Timestamp":
+                    df['Timestamp'] = pd.Timestamp.now(tz='UTC')
+                    st.warning("⚠️ Using current time for Timestamp.")
+
+        # Final check
+        for col in required_cols:
+            if col not in df.columns:
+                st.error(f"🛑 Still missing: '{col}' → Cannot continue.")
+                st.stop()
+
+    # --- Clean 'text' column ---
     df['text'] = df['text'].astype(str)
     df = df[df['text'].notna()]
     df = df[df['text'].str.strip() != ""]
     df = df[df['text'].str.lower() != "nan"].reset_index(drop=True)
 
+    # --- Clean text function ---
     def clean_text(text):
         if not isinstance(text, str):
             return ""
@@ -201,14 +267,24 @@ def preprocess_data(df):
     df['text'] = df['text'].apply(clean_text)
     df = df[df['text'].str.len() > 0].reset_index(drop=True)
 
+    # --- Extract Hashtags ---
     df['hashtags'] = df['text'].str.findall(r'#\w+') \
                        .apply(lambda tags: [tag.lower() for tag in tags if len(tag) > 1])
 
+    # --- Timestamp Parsing ---
     date_formats = [
-        '%b %d, %Y @ %H:%M:%S.%f', '%d-%b-%Y %I:%M%p', '%Y-%m-%d %H:%M:%S',
-        '%d/%m/%Y %H:%M:%S', '%m/%d/%Y %H:%M:%S', '%Y-%m-%dT%H:%M:%SZ',
-        '%Y-%m-%d %H:%M:%S.%f', '%d %b %Y %H:%M:%S', '%A, %d %b %Y %H:%M:%S',
-        '%b %d, %Y %I:%M%p', '%d %b %Y %I:%M%p', '%Y-%m-%d %H:%M:%S%z',
+        '%b %d, %Y @ %H:%M:%S.%f',
+        '%d-%b-%Y %I:%M%p',
+        '%Y-%m-%d %H:%M:%S',
+        '%d/%m/%Y %H:%M:%S',
+        '%m/%d/%Y %H:%M:%S',
+        '%Y-%m-%dT%H:%M:%SZ',
+        '%Y-%m-%d %H:%M:%S.%f',
+        '%d %b %Y %H:%M:%S',
+        '%A, %d %b %Y %H:%M:%S',
+        '%b %d, %Y %I:%M%p',
+        '%d %b %Y %I:%M%p',
+        '%Y-%m-%d %H:%M:%S%z',
     ]
 
     def parse_timestamp(timestamp):
@@ -226,24 +302,25 @@ def preprocess_data(df):
     df['Timestamp'] = df['Timestamp'].apply(parse_timestamp)
     df = df.dropna(subset=['Timestamp']).reset_index(drop=True)
 
-    url_cols = ['URL', 'url', 'webVideoUrl', 'link', 'post_url']
+    # --- Create 'Platform' from URL ---
+    url_cols = ['URL', 'url', 'webVideoUrl', 'link', 'post_url', 'Parent URL']
     url_found = False
     for col in url_cols:
         if col in df.columns:
-            df['URL'] = df[col]
+            df['URL'] = df[col].astype(str).replace('nan', '').replace('None', '')
             url_found = True
             break
 
-    if url_found and 'URL' in df.columns:
+    if url_found:
         df['Platform'] = df['URL'].apply(infer_platform_from_url)
     else:
         df['Platform'] = "Unknown"
         st.sidebar.warning("⚠️ No URL column found → all platforms marked as 'Unknown'")
 
+    # --- Extract original text (remove RT) ---
     df['original_text'] = df['text'].apply(extract_original_text)
 
     return df
-
 # Vectorized similarity function
 def find_textual_similarities(df, threshold=0.85):
     clean_df = df[['original_text', 'Influencer', 'Timestamp', 'URL', 'Platform']].copy()
