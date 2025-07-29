@@ -64,16 +64,16 @@ def load_default_datasets():
             st.sidebar.warning(f"⚠️ Failed to load {key}: {e}")
             loaded_dfs[key] = pd.DataFrame()
 
-    return loaded_dfs["meltwater"], loaded_dfs["civicsignals"], loaded_dfs["openmeasure"]
+    return loaded_dfs["meltwater"], loaded_dfs["civicsignals"] #, loaded_dfs["openmeasure"]
 
 # --- Combine Multiple Datasets ---
 def combine_social_media_data(
     meltwater_df,
     civicsignals_df,
-    openmeasure_df,
+    #openmeasure_df,
     meltwater_object_col='URL',
     civicsignals_object_col='url',
-    openmeasure_object_col='url'
+    #openmeasure_object_col='url'
 ):
     """
     Combines datasets from Meltwater, CivicSignals, and Open-Measure.
@@ -111,11 +111,11 @@ def combine_social_media_data(
         cs = pd.DataFrame()
 
     # Process Open-Measure
-    if not openmeasure_df.empty:
-        om = openmeasure_df[['actor_username', 'id', openmeasure_object_col, 'created_at']].copy()
-        om.columns = ['account_id', 'content_id', 'object_id', 'timestamp_share']
-    else:
-        om = pd.DataFrame()
+    #if not openmeasure_df.empty:
+     #   om = openmeasure_df[['actor_username', 'id', openmeasure_object_col, 'created_at']].copy()
+    #    om.columns = ['account_id', 'content_id', 'object_id', 'timestamp_share']
+   # else:
+    #    om = pd.DataFrame()
 
     # Combine
     combined = pd.concat([mw, cs, om], ignore_index=True)
