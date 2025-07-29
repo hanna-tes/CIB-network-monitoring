@@ -62,23 +62,23 @@ def load_default_datasets():
             if not df.empty:
                 if key == "meltwater":
                     meltwater_df = df
-                elif key == "civicsignal":
-                    civicsignal_df = df
+                elif key == "civicsignals":
+                    civicsignals_df = df
                 st.sidebar.success(f"✅ {key.capitalize()}: Data loaded from default URL")
             else:
                 st.sidebar.warning(f"⚠️ {key.capitalize()}: Loaded but file is empty.")
         except Exception as e:
             st.sidebar.warning(f"⚠️ Failed to load {key}: {e}")
 
-    return meltwater_df, civicsignal_df
+    return meltwater_df, civicsignals_df
 
 # --- Combine Multiple Datasets (Supports All Three) ---
 def combine_social_media_data(
     meltwater_df,
-    civicsignal_df,
+    civicsignals_df,
     openmeasure_df=None,
     meltwater_object_col='URL',
-    civicsignal_object_col='url',
+    civicsignals_object_col='url',
     openmeasure_object_col='url'
 ):
     """
@@ -110,8 +110,8 @@ def combine_social_media_data(
 
     # Process CivicSignals
     cs = pd.DataFrame()
-    if civicsignal_df is not None and not civicsignal_df.empty:
-        cs = civicsignal_df[['media_name', 'stories_id', civicsignal_object_col, 'publish_date']].copy()
+    if civicsignals_df is not None and not civicsignals_df.empty:
+        cs = civicsignals_df[['media_name', 'stories_id', civicsignals_object_col, 'publish_date']].copy()
         cs.columns = ['account_id', 'content_id', 'object_id', 'timestamp_share']
 
     # Process Open-Measure (optional)
