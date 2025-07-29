@@ -44,13 +44,12 @@ def extract_original_text(text):
     cleaned = re.sub(r'^(RT|rt)\s+@\w+:\s*', '', text, flags=re.IGNORECASE).strip()
     return cleaned
 
-# --- Load Default Datasets (Only Meltwater & CivicSignals) ---
 @st.cache_data(show_spinner="📥 Loading default datasets...")
 def load_default_datasets():
     base_url = "https://raw.githubusercontent.com/hanna-tes/CIB-network-monitoring/refs/heads/main/"
     urls = {
         "meltwater": f"{base_url}TogoJULYData%20-%20Sheet1.csv",
-        "civicsignals": f"{base_url}togo-or-lome-or-togo-all-story-urls-20250707142808.csv"  # Update filename as needed
+        "civicsignals": f"{base_url}togo-or-lome-or-togo-all-story-urls-20250707142808.csv"
     }
 
     meltwater_df = pd.DataFrame()
@@ -72,7 +71,7 @@ def load_default_datasets():
 
     return meltwater_df, civicsignals_df
 
-# --- Combine Multiple Datasets (Supports All Three) ---
+# --- Combine Multiple Datasets ---
 def combine_social_media_data(
     meltwater_df,
     civicsignals_df,
@@ -82,8 +81,8 @@ def combine_social_media_data(
     openmeasure_object_col='url'
 ):
     """
-    Combines datasets from Meltwater, CivicSignals, and Open-Measure.
-    If openmeasure_df is None, only combines the first two.
+    Combines datasets from Meltwater, CivicSignals, and Open-Measure (optional).
+    Returns unified DataFrame with: account_id, content_id, object_id, timestamp_share
     """
     date_formats = [
         '%b %d, %Y @ %H:%M:%S.%f', '%d-%b-%Y %I:%M%p', '%Y-%m-%d %H:%M:%S',
@@ -151,52 +150,33 @@ def preprocess_data(df):
 
     df = df.drop_duplicates().reset_index(drop=True)
 
-    # --- EARLY COLUMN MAPPING ---
+    # --- EARLY COLUMN MAPPING (Case-insensitive, normalized) ---
     col_map = {
-        # 👤 Influencer
-        'account_id': 'Influencer',
-        'Influencer': 'Influencer',
-        'author': 'Influencer',
-        'username': 'Influencer',
-        'user': 'Influencer',
-        'Source': 'Influencer',
-        'media_name': 'Influencer',
-        'channeltitle': 'Influencer',
-        'creator': 'Influencer',
-        'authorMeta/name': 'Influencer',
-
-        # 📅 Timestamp
-        'timestamp_share': 'Timestamp',
-        'Timestamp': 'Timestamp',
-        'Date': 'Timestamp',
-        'Alternate Date Format': 'Timestamp',
-        'createTimeISO': 'Timestamp',
-        'publish_date': 'Timestamp',
-        'created_at': 'Timestamp',
-        'pubDate': 'Timestamp',
-
         # 💬 Text Content
-        'Hit Sentence': 'text',
-        'Headline': 'text',
-        'opening text': 'text',
-        'Opening Text': 'text',
-        'message': 'text',
-        'content': 'text',
-        'description': 'text',
-        'Body': 'text',
-        'FullText': 'text',
+        'Hit Sentence': 'text', 'Headline': 'text', 'opening text': 'text',
+        'Opening Text': 'text', 'message': 'text', 'content': 'text',
+        'description': 'text', 'Body': 'text', 'FullText': 'text',
+        'title': 'text', 'hit sentence': 'text', 'caption': 'text',
 
-        # 🔗 URL
-        'URL': 'URL',
-        'url': 'URL',
-        'webVideoUrl': 'URL',
-        'link': 'URL',
-        'post_url': 'URL',
-        'media_url': 'URL',
-        'object_id': 'URL',
+        # 👤 Influencer / Author
+        'Influencer': 'Influencer', 'author': 'Influencer', 'username': 'Influencer',
+        'user': 'Influencer', 'creator': 'Influencer', 'authorname': 'Influencer',
+        'media_name': 'Influencer', 'channeltitle': 'Influencer', 'source': 'Influencer',
+
+        # 📅 Timestamps
+        'Date': 'Timestamp', 'Alternate Date Format': 'Timestamp', 'createTimeISO': 'Timestamp',
+        'published_date': 'Timestamp', 'pubDate': 'Timestamp', 'created_at': 'Timestamp',
+        'publish_date': 'Timestamp', 'timestamp_share': 'Timestamp', 'Time': 'Timestamp',
+
+        # 🔗 URL Variants
+        'URL': 'URL', 'url': 'URL', 'webVideoUrl': 'URL', 'link': 'URL',
+        'post_url': 'URL', 'media_url': 'URL', 'object_id': 'URL',
+
+        # 📺 Media & Channel Metadata
+        'media_name': 'MediaOutlet', 'channeltitle': 'Channel', 'source': 'Source',
     }
 
-    # Apply mapping
+    # Apply mapping with normalization
     new_columns = []
     for col in df.columns:
         if col in col_map:
@@ -221,9 +201,9 @@ def preprocess_data(df):
         st.error(f"❌ Missing required columns after mapping: {missing_cols}")
 
         suggestions = {
-            'Influencer': ['account_id', 'source', 'author', 'username', 'media_name'],
-            'Timestamp': ['timestamp_share', 'date', 'alternate date format', 'created_at'],
-            'text': ['hit sentence', 'opening text', 'headline', 'message']
+            'Influencer': ['influencer', 'author', 'username', 'user', 'creator', 'media_name'],
+            'Timestamp': ['date', 'time', 'created_at', 'publish_date', 'timestamp_share'],
+            'text': ['hit sentence', 'opening text', 'headline', 'message', 'content']
         }
 
         for col in missing_cols:
@@ -422,7 +402,6 @@ df = pd.DataFrame()
 if data_source == "Use Default Datasets":
     with st.spinner("📥 Loading and combining Meltwater and Media data..."):
         meltwater_df, civicsignals_df = load_default_datasets()
-        # DO NOT include Open-Measure in default
         df = combine_social_media_data(meltwater_df, civicsignals_df)
     if df.empty:
         st.warning("No data loaded from default datasets.")
@@ -454,7 +433,7 @@ if df.empty:
     st.error("❌ No valid data after preprocessing.")
     st.stop()
 
-# --- Allow Download of Combined Data ---
+# --- Download Combined Data ---
 st.sidebar.markdown("### 💾 Download Combined Data")
 @st.cache_data
 def convert_df(data):
