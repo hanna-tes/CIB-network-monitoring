@@ -50,8 +50,8 @@ def load_default_datasets():
     base_url = "https://raw.githubusercontent.com/hanna-tes/CIB-network-monitoring/refs/heads/main/"
     datasets = {
         "meltwater": f"{base_url}TogoJULYData%20-%20Sheet1.csv",
-        "civicsignals": f"{base_url}CivicSignals_Sample.csv",  # Update filename as needed
-        "openmeasure": f"{base_url}OpenMeasure_Sample.csv"     # Update filename as needed
+        "civicsignals": f"{base_url}togo-or-lome-or-togo-all-story-urls-20250707142808.csv",  # Update filename as needed
+        #"openmeasure": f"{base_url}OpenMeasure_Sample.csv"     # Update filename as needed
     }
     loaded_dfs = {}
 
