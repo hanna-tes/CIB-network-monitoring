@@ -44,16 +44,27 @@ def extract_original_text(text):
     cleaned = re.sub(r'^(RT|rt)\s+@\w+:\s*', '', text, flags=re.IGNORECASE).strip()
     return cleaned
 
-@st.cache_data(show_spinner=False)
-def load_default_dataset():
-    url = "https://raw.githubusercontent.com/hanna-tes/CIB-network-monitoring/refs/heads/main/TogoJULYData%20-%20Sheet1.csv"
-    try:
-        df = pd.read_csv(url)
-        st.sidebar.success("✅ Default data loaded")
-        return df
-    except Exception as e:
-        st.error(f"Failed to load default dataset: {e}")
-        return pd.DataFrame()
+# --- Load Default Datasets from GitHub URLs ---
+@st.cache_data(show_spinner="📥 Loading default datasets...")
+def load_default_datasets():
+    base_url = "https://raw.githubusercontent.com/hanna-tes/CIB-network-monitoring/refs/heads/main/"
+    datasets = {
+        "meltwater": f"{base_url}TogoJULYData%20-%20Sheet1.csv",
+        "civicsignals": f"{base_url}CivicSignals_Sample.csv",  # Update filename as needed
+        "openmeasure": f"{base_url}OpenMeasure_Sample.csv"     # Update filename as needed
+    }
+    loaded_dfs = {}
+
+    for key, url in datasets.items():
+        try:
+            df = pd.read_csv(url)
+            st.sidebar.success(f"✅ {key.capitalize()}: Data loaded from default URL")
+            loaded_dfs[key] = df
+        except Exception as e:
+            st.sidebar.warning(f"⚠️ Failed to load {key}: {e}")
+            loaded_dfs[key] = pd.DataFrame()
+
+    return loaded_dfs["meltwater"], loaded_dfs["civicsignals"], loaded_dfs["openmeasure"]
 
 # --- Combine Multiple Datasets ---
 def combine_social_media_data(
@@ -68,20 +79,11 @@ def combine_social_media_data(
     Combines datasets from Meltwater, CivicSignals, and Open-Measure.
     Returns unified DataFrame with: account_id, content_id, object_id, timestamp_share
     """
-    # List of common timestamp formats
     date_formats = [
-        '%b %d, %Y @ %H:%M:%S.%f',
-        '%d-%b-%Y %I:%M%p',
-        '%Y-%m-%d %H:%M:%S',
-        '%d/%m/%Y %H:%M:%S',
-        '%m/%d/%Y %H:%M:%S',
-        '%Y-%m-%dT%H:%M:%SZ',
-        '%Y-%m-%d %H:%M:%S.%f',
-        '%d %b %Y %H:%M:%S',
-        '%A, %d %b %Y %H:%M:%S',
-        '%b %d, %Y %I:%M%p',
-        '%d %b %Y %I:%M%p',
-        '%Y-%m-%d %H:%M:%S%z',
+        '%b %d, %Y @ %H:%M:%S.%f', '%d-%b-%Y %I:%M%p', '%Y-%m-%d %H:%M:%S',
+        '%d/%m/%Y %H:%M:%S', '%m/%d/%Y %H:%M:%S', '%Y-%m-%dT%H:%M:%SZ',
+        '%Y-%m-%d %H:%M:%S.%f', '%d %b %Y %H:%M:%S', '%A, %d %b %Y %H:%M:%S',
+        '%b %d, %Y %I:%M%p', '%d %b %Y %I:%M%p', '%Y-%m-%d %H:%M:%S%z',
     ]
 
     def parse_timestamp(timestamp):
@@ -95,25 +97,25 @@ def combine_social_media_data(
         return pd.to_datetime(timestamp, infer_datetime_format=True, errors='coerce')
 
     # Process Meltwater
-    if meltwater_df is not None and not meltwater_df.empty:
+    if not meltwater_df.empty:
         mw = meltwater_df[['Influencer', 'Tweet Id', meltwater_object_col, 'Date']].copy()
         mw.columns = ['account_id', 'content_id', 'object_id', 'timestamp_share']
     else:
-        mw = pd.DataFrame(columns=['account_id', 'content_id', 'object_id', 'timestamp_share'])
+        mw = pd.DataFrame()
 
     # Process CivicSignals
-    if civicsignals_df is not None and not civicsignals_df.empty:
+    if not civicsignals_df.empty:
         cs = civicsignals_df[['media_name', 'stories_id', civicsignals_object_col, 'publish_date']].copy()
         cs.columns = ['account_id', 'content_id', 'object_id', 'timestamp_share']
     else:
-        cs = pd.DataFrame(columns=['account_id', 'content_id', 'object_id', 'timestamp_share'])
+        cs = pd.DataFrame()
 
     # Process Open-Measure
-    if openmeasure_df is not None and not openmeasure_df.empty:
+    if not openmeasure_df.empty:
         om = openmeasure_df[['actor_username', 'id', openmeasure_object_col, 'created_at']].copy()
         om.columns = ['account_id', 'content_id', 'object_id', 'timestamp_share']
     else:
-        om = pd.DataFrame(columns=['account_id', 'content_id', 'object_id', 'timestamp_share'])
+        om = pd.DataFrame()
 
     # Combine
     combined = pd.concat([mw, cs, om], ignore_index=True)
@@ -126,7 +128,7 @@ def combine_social_media_data(
     )
     combined['content_id'] = combined['content_id'].astype(str).str.replace('"', '', regex=False)
 
-    # Extract hashtags if needed
+    # Extract hashtags
     def extract_hashtags(text):
         return ','.join(re.findall(r'#(\w+)', str(text))) if pd.notna(text) else ""
 
@@ -138,34 +140,25 @@ def combine_social_media_data(
 # --- Preprocessing Function ---
 def preprocess_data(df):
     """Preprocesses the DataFrame: maps columns, cleans text, parses timestamps."""
-    # 1. Remove duplicates
+    if df.empty:
+        return df
+
     df = df.drop_duplicates().reset_index(drop=True)
 
-    # --- COLUMN MAPPING ---
     col_map = {
-        # 💬 Text Content
         'Hit Sentence': 'text', 'Headline': 'text', 'message': 'text',
         'title': 'text', 'content': 'text', 'description': 'text',
         'opening text': 'text', 'Body': 'text', 'FullText': 'text',
-
-        # 👤 Influencer / Author
         'Influencer': 'Influencer', 'author': 'Influencer', 'username': 'Influencer',
         'user': 'Influencer', 'authorMeta/name': 'Influencer', 'creator': 'Influencer',
         'authorname': 'Influencer',
-
-        # 📅 Timestamps
         'Date': 'Timestamp', 'createTimeISO': 'Timestamp', 'published_date': 'Timestamp',
         'pubDate': 'Timestamp', 'created_at': 'Timestamp', 'Alternate Date Format': 'Timestamp',
-
-        # 🔗 URL Variants
         'URL': 'URL', 'url': 'URL', 'webVideoUrl': 'URL', 'link': 'URL', 'post_url': 'URL',
-
-        # 📺 Media & Channel Metadata
         'media_name': 'Outlet', 'channeltitle': 'Channel', 'source': 'Outlet',
         'Input Name': 'InputSource',
     }
 
-    # Apply mapping
     new_columns = []
     for col in df.columns:
         if col in col_map:
@@ -182,42 +175,19 @@ def preprocess_data(df):
     df.columns = new_columns
     df = df.loc[:, ~df.columns.duplicated()]
 
-    # --- Validate Required Columns ---
     required_cols = ["Influencer", "Timestamp", "text"]
     missing_cols = [col for col in required_cols if col not in df.columns]
 
     if missing_cols:
         st.error(f"❌ Missing required columns: {missing_cols}")
-        suggestions = {
-            'Influencer': ['source', 'author', 'user', 'username'],
-            'Timestamp': ['date', 'time', 'created', 'published'],
-            'text': ['message', 'content', 'body', 'headline', 'hit sentence']
-        }
         for col in missing_cols:
-            close_matches = [c for c in df.columns if any(sugg in c.lower().replace(" ", "") for sugg in suggestions.get(col, []))]
-            if close_matches:
-                st.info(f"💡 Did you mean to rename `{close_matches[0]}` → `{col}`?")
-            else:
-                if col == "Influencer":
-                    df['Influencer'] = "Unknown_User"
-                elif col == "text":
-                    st.error("🚫 No text column found. Cannot proceed.")
-                    st.stop()
-                elif col == "Timestamp":
-                    df['Timestamp'] = pd.Timestamp.now(tz='UTC')
-        for col in required_cols:
-            if col not in df.columns:
-                st.error(f"🛑 Still missing: '{col}' → Cannot continue.")
-                st.stop()
+            st.info(f"💡 Please ensure your data has a '{col}' field.")
+        st.stop()
 
-    # --- Clean 'text' column ---
     df['text'] = df['text'].astype(str)
-
-    # Then: Drop rows where 'text' is NaN or just whitespace
     df = df[df['text'].notna()]
     df = df[df['text'].str.strip() != ""]
-    df = df[df['text'] != "nan"]  # Remove rows that became "nan" after str conversion
-    df = df.reset_index(drop=True)
+    df = df[df['text'].str.lower() != "nan"].reset_index(drop=True)
 
     def clean_text(text):
         if not isinstance(text, str):
@@ -234,11 +204,9 @@ def preprocess_data(df):
     df['text'] = df['text'].apply(clean_text)
     df = df[df['text'].str.len() > 0].reset_index(drop=True)
 
-    # --- Extract Hashtags ---
     df['hashtags'] = df['text'].str.findall(r'#\w+') \
                        .apply(lambda tags: [tag.lower() for tag in tags if len(tag) > 1])
 
-    # --- Timestamp Parsing ---
     date_formats = [
         '%b %d, %Y @ %H:%M:%S.%f', '%d-%b-%Y %I:%M%p', '%Y-%m-%d %H:%M:%S',
         '%d/%m/%Y %H:%M:%S', '%m/%d/%Y %H:%M:%S', '%Y-%m-%dT%H:%M:%SZ',
@@ -261,7 +229,6 @@ def preprocess_data(df):
     df['Timestamp'] = df['Timestamp'].apply(parse_timestamp)
     df = df.dropna(subset=['Timestamp']).reset_index(drop=True)
 
-    # --- Create 'Platform' from URL ---
     url_cols = ['URL', 'url', 'webVideoUrl', 'link', 'post_url']
     url_found = False
     for col in url_cols:
@@ -276,21 +243,13 @@ def preprocess_data(df):
         df['Platform'] = "Unknown"
         st.sidebar.warning("⚠️ No URL column found → all platforms marked as 'Unknown'")
 
-    # --- Extract original text (remove RT) ---
     df['original_text'] = df['text'].apply(extract_original_text)
 
     return df
 
 # Vectorized similarity function
 def find_textual_similarities(df, threshold=0.85):
-    """
-    Computes similarity between posts using 'original_text' (RTs removed).
-    Only compares original content to avoid false positives from retweets.
-    """
-    # Start with necessary columns, including metadata
     clean_df = df[['original_text', 'Influencer', 'Timestamp', 'URL', 'Platform']].copy()
-
-    # Ensure string type and drop invalid
     clean_df['original_text'] = clean_df['original_text'].astype(str)
     clean_df = clean_df.dropna(subset=['original_text', 'Influencer', 'Timestamp', 'Platform'])
     clean_df = clean_df[clean_df['original_text'].str.strip() != ""]
@@ -300,18 +259,15 @@ def find_textual_similarities(df, threshold=0.85):
         st.info("Not enough valid original posts for similarity analysis.")
         return pd.DataFrame()
 
-    # Vectorize with TF-IDF
     vectorizer = TfidfVectorizer(stop_words='english', max_features=10000)
     try:
         tfidf_matrix = vectorizer.fit_transform(texts)
-    except ValueError as e:
-        st.warning(f"Could not create TF-IDF matrix: {e}")
+    except:
         return pd.DataFrame()
 
-    # Compute cosine similarity
     sim_matrix = cosine_similarity(tfidf_matrix)
     np.fill_diagonal(sim_matrix, 0)
-    sim_matrix = np.triu(sim_matrix, k=1)  # Upper triangle only
+    sim_matrix = np.triu(sim_matrix, k=1)
     idx_i, idx_j = np.where(sim_matrix >= threshold)
 
     seen = set()
@@ -322,18 +278,15 @@ def find_textual_similarities(df, threshold=0.85):
         if key in seen:
             continue
         seen.add(key)
-
         row1 = clean_df.iloc[i]
         row2 = clean_df.iloc[j]
 
-        # Create narrative snippet
         narrative_snippet = row1['original_text'][:150]
         if len(row1['original_text']) > 150:
             narrative_snippet += "..."
         if not narrative_snippet.strip():
             narrative_snippet = "Empty/Cleaned Text"
 
-        # Platforms involved
         platforms_involved = sorted(list(set([row1['Platform'], row2['Platform']])))
         platforms_involved_str = ", ".join(p for p in platforms_involved if pd.notna(p) and p.strip() != "")
 
@@ -387,36 +340,48 @@ def cached_network_graph(_df):
         cluster_map = {n: 0 for n in G.nodes}
         return G, pos, cluster_map
 
-# --- Sidebar: Upload Multiple Datasets ---
-st.sidebar.header("📁 Upload Datasets")
-st.sidebar.info("Upload CSVs from Meltwater, CivicSignals, Open-Measure")
+# --- Sidebar: Data Source Selection ---
+st.sidebar.header("📥 Data Source")
+data_source = st.sidebar.radio(
+    "Choose data source:",
+    ("Use Default Datasets", "Upload CSV Files")
+)
 
-uploaded_meltwater = st.sidebar.file_uploader("Upload Meltwater CSV", type=["csv"], key="meltwater")
-uploaded_civicsignals = st.sidebar.file_uploader("Upload CivicSignals CSV", type=["csv"], key="civicsignals")
-uploaded_openmeasure = st.sidebar.file_uploader("Upload Open-Measure CSV", type=["csv"], key="openmeasure")
+df = pd.DataFrame()
 
-# --- Load Data ---
-if uploaded_meltwater or uploaded_civicsignals or uploaded_openmeasure:
-    # Read each dataset
-    meltwater_df = pd.read_csv(uploaded_meltwater) if uploaded_meltwater else pd.DataFrame()
-    civicsignals_df = pd.read_csv(uploaded_civicsignals) if uploaded_civicsignals else pd.DataFrame()
-    openmeasure_df = pd.read_csv(uploaded_openmeasure) if uploaded_openmeasure else pd.DataFrame()
-
-    # Combine
-    with st.spinner("Combining datasets..."):
+if data_source == "Use Default Datasets":
+    with st.spinner("📥 Loading and combining default datasets..."):
+        meltwater_df, civicsignals_df, openmeasure_df = load_default_datasets()
         df = combine_social_media_data(meltwater_df, civicsignals_df, openmeasure_df)
-    st.sidebar.success(f"✅ Combined {len(df)} posts from multiple sources")
-else:
-    st.sidebar.info("Using default demo dataset")
-    df = load_default_dataset()
+    if df.empty:
+        st.warning("No data loaded from default datasets.")
+        st.stop()
+    st.sidebar.success(f"✅ Combined {len(df)} posts from default datasets")
 
-# Exit if no data
-if df is None or df.empty:
-    st.warning("No data available. Please upload valid datasets.")
-    st.stop()
+elif data_source == "Upload CSV Files":
+    st.sidebar.info("Upload CSVs from Meltwater, CivicSignals, Open-Measure")
+
+    uploaded_meltwater = st.sidebar.file_uploader("Upload Meltwater CSV", type=["csv"], key="meltwater")
+    uploaded_civicsignals = st.sidebar.file_uploader("Upload CivicSignals CSV", type=["csv"], key="civicsignals")
+    uploaded_openmeasure = st.sidebar.file_uploader("Upload Open-Measure CSV", type=["csv"], key="openmeasure")
+
+    if uploaded_meltwater or uploaded_civicsignals or uploaded_openmeasure:
+        meltwater_df = pd.read_csv(uploaded_meltwater) if uploaded_meltwater else pd.DataFrame()
+        civicsignals_df = pd.read_csv(uploaded_civicsignals) if uploaded_civicsignals else pd.DataFrame()
+        openmeasure_df = pd.read_csv(uploaded_openmeasure) if uploaded_openmeasure else pd.DataFrame()
+
+        with st.spinner("Combining uploaded datasets..."):
+            df = combine_social_media_data(meltwater_df, civicsignals_df, openmeasure_df)
+        st.sidebar.success(f"✅ Combined {len(df)} posts from uploaded files")
+    else:
+        st.warning("Please upload at least one CSV file.")
+        st.stop()
 
 # --- Preprocess ---
 df = preprocess_data(df)
+if df.empty:
+    st.error("❌ No valid data after preprocessing.")
+    st.stop()
 
 # --- Sidebar Filters ---
 st.sidebar.header("🔍 Filters")
@@ -428,10 +393,7 @@ platforms = st.sidebar.multiselect(
 )
 
 # Apply platform filter
-if platforms:
-    filtered_df = df[df['Platform'].isin(platforms)].copy()
-else:
-    filtered_df = df.copy()
+filtered_df = df[df['Platform'].isin(platforms)].copy() if platforms else df.copy()
 
 # Export button
 st.sidebar.markdown("### 📄 Export Results")
