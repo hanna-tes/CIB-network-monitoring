@@ -10,7 +10,6 @@ from sklearn.metrics.pairwise import cosine_similarity
 import re
 from io import StringIO
 import csv
-
 # --- Set Page Config ---
 st.set_page_config(page_title="CIB Dashboard", layout="wide")
 st.title("🕵️ CIB Network Monitoring Dashboard")
@@ -44,39 +43,44 @@ def extract_original_text(text):
     cleaned = re.sub(r'^(RT|rt)\s+@\w+:\s*', '', text, flags=re.IGNORECASE).strip()
     return cleaned
 
-# --- Load Default Datasets from GitHub URLs ---
+# --- Load Default Datasets from GitHub URLs (Only Meltwater & CivicSignals) ---
 @st.cache_data(show_spinner="📥 Loading default datasets...")
 def load_default_datasets():
     base_url = "https://raw.githubusercontent.com/hanna-tes/CIB-network-monitoring/refs/heads/main/"
-    datasets = {
+    urls = {
         "meltwater": f"{base_url}TogoJULYData%20-%20Sheet1.csv",
-        "civicsignals": f"{base_url}togo-or-lome-or-togo-all-story-urls-20250707142808.csv",  # Update filename as needed
-        #"openmeasure": f"{base_url}OpenMeasure_Sample.csv"     # Update filename as needed
+        "civicsignals": f"{base_url}togo-or-lome-or-togo-all-story-urls-20250707142808.csv"  # Update filename if needed
     }
-    loaded_dfs = {}
 
-    for key, url in datasets.items():
+    # Initialize DataFrames
+    meltwater_df = pd.DataFrame()
+    civicsignals_df = pd.DataFrame()
+
+    for key, url in urls.items():
         try:
             df = pd.read_csv(url)
-            st.sidebar.success(f"✅ {key.capitalize()}: Data loaded from default URL")
-            loaded_dfs[key] = df
+            if not df.empty:
+                if key == "meltwater":
+                    meltwater_df = df
+                elif key == "civicsignals":
+                    civicsignals_df = df
+                st.sidebar.success(f"✅ {key.capitalize()}: Data loaded from default URL")
+            else:
+                st.sidebar.warning(f"⚠️ {key.capitalize()}: Loaded but file is empty.")
         except Exception as e:
             st.sidebar.warning(f"⚠️ Failed to load {key}: {e}")
-            loaded_dfs[key] = pd.DataFrame()
 
-    return loaded_dfs["meltwater"], loaded_dfs["civicsignals"] #, loaded_dfs["openmeasure"]
+    return meltwater_df, civicsignals_df
 
 # --- Combine Multiple Datasets ---
 def combine_social_media_data(
     meltwater_df,
     civicsignals_df,
-    #openmeasure_df,
     meltwater_object_col='URL',
-    civicsignals_object_col='url',
-    #openmeasure_object_col='url'
+    civicsignals_object_col='url'
 ):
     """
-    Combines datasets from Meltwater, CivicSignals, and Open-Measure.
+    Combines Meltwater and CivicSignals datasets only.
     Returns unified DataFrame with: account_id, content_id, object_id, timestamp_share
     """
     date_formats = [
@@ -110,15 +114,8 @@ def combine_social_media_data(
     else:
         cs = pd.DataFrame()
 
-    # Process Open-Measure
-    #if not openmeasure_df.empty:
-     #   om = openmeasure_df[['actor_username', 'id', openmeasure_object_col, 'created_at']].copy()
-    #    om.columns = ['account_id', 'content_id', 'object_id', 'timestamp_share']
-   # else:
-    #    om = pd.DataFrame()
-
     # Combine
-    combined = pd.concat([mw, cs, om], ignore_index=True)
+    combined = pd.concat([mw, cs], ignore_index=True)
     combined = combined.dropna(subset=['account_id', 'content_id', 'object_id', 'timestamp_share'])
     combined['timestamp_share'] = combined['timestamp_share'].apply(parse_timestamp)
     combined = combined.dropna(subset=['timestamp_share']).reset_index(drop=True)
@@ -128,7 +125,7 @@ def combine_social_media_data(
     )
     combined['content_id'] = combined['content_id'].astype(str).str.replace('"', '', regex=False)
 
-    # Extract hashtags
+    # Extract hashtags if needed
     def extract_hashtags(text):
         return ','.join(re.findall(r'#(\w+)', str(text))) if pd.notna(text) else ""
 
@@ -350,28 +347,26 @@ data_source = st.sidebar.radio(
 df = pd.DataFrame()
 
 if data_source == "Use Default Datasets":
-    with st.spinner("📥 Loading and combining default datasets..."):
-        meltwater_df, civicsignals_df, openmeasure_df = load_default_datasets()
-        df = combine_social_media_data(meltwater_df, civicsignals_df, openmeasure_df)
+    with st.spinner("📥 Loading and combining Meltwater and Media data..."):
+        meltwater_df, civicsignals_df = load_default_datasets()
+        df = combine_social_media_data(meltwater_df, civicsignals_df)
     if df.empty:
         st.warning("No data loaded from default datasets.")
         st.stop()
-    st.sidebar.success(f"✅ Combined {len(df)} posts from default datasets")
+    st.sidebar.success(f"✅ Combined {len(df)} posts from Meltwater and Media")
 
 elif data_source == "Upload CSV Files":
-    st.sidebar.info("Upload CSVs from Meltwater, CivicSignals, Open-Measure")
+    st.sidebar.info("Upload CSVs from Meltwater and/or Media sources")
 
     uploaded_meltwater = st.sidebar.file_uploader("Upload Meltwater CSV", type=["csv"], key="meltwater")
     uploaded_civicsignals = st.sidebar.file_uploader("Upload CivicSignals CSV", type=["csv"], key="civicsignals")
-    uploaded_openmeasure = st.sidebar.file_uploader("Upload Open-Measure CSV", type=["csv"], key="openmeasure")
 
-    if uploaded_meltwater or uploaded_civicsignals or uploaded_openmeasure:
+    if uploaded_meltwater or uploaded_civicsignals:
         meltwater_df = pd.read_csv(uploaded_meltwater) if uploaded_meltwater else pd.DataFrame()
         civicsignals_df = pd.read_csv(uploaded_civicsignals) if uploaded_civicsignals else pd.DataFrame()
-        openmeasure_df = pd.read_csv(uploaded_openmeasure) if uploaded_openmeasure else pd.DataFrame()
 
         with st.spinner("Combining uploaded datasets..."):
-            df = combine_social_media_data(meltwater_df, civicsignals_df, openmeasure_df)
+            df = combine_social_media_data(meltwater_df, civicsignals_df)
         st.sidebar.success(f"✅ Combined {len(df)} posts from uploaded files")
     else:
         st.warning("Please upload at least one CSV file.")
