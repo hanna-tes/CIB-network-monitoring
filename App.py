@@ -211,9 +211,13 @@ def preprocess_data(df):
                 st.stop()
 
     # --- Clean 'text' column ---
+    df['text'] = df['text'].astype(str)
+
+    # Then: Drop rows where 'text' is NaN or just whitespace
     df = df[df['text'].notna()]
     df = df[df['text'].str.strip() != ""]
-    df['text'] = df['text'].astype(str)
+    df = df[df['text'] != "nan"]  # Remove rows that became "nan" after str conversion
+    df = df.reset_index(drop=True)
 
     def clean_text(text):
         if not isinstance(text, str):
