@@ -110,45 +110,53 @@ def combine_social_media_data(
     """
     Combines datasets from Meltwater, CivicSignals, and Open-Measure (optional) into a unified format
     with specific column mappings as per user's latest instructions.
+    Handles case sensitivity of column names by converting to lowercase.
     """
     combined_dfs = []
 
     # Helper to safely get column by exact name, return NaN series if not found
-    def get_specific_col(df, col_name):
-        if col_name in df.columns:
-            return df[col_name]
+    # Now expects column_name to be lowercase as df.columns will be lowercased
+    def get_specific_col(df, col_name_lower):
+        if col_name_lower in df.columns:
+            return df[col_name_lower]
         return pd.Series([np.nan] * len(df), index=df.index)
 
     # Process Meltwater
     if meltwater_df is not None and not meltwater_df.empty:
+        # Convert all column names to lowercase for robust lookup
+        meltwater_df.columns = meltwater_df.columns.str.lower()
         mw = pd.DataFrame()
-        mw['account_id'] = get_specific_col(meltwater_df, 'Influencer')
-        mw['content_id'] = get_specific_col(meltwater_df, 'Tweet Id')
-        mw['object_id'] = get_specific_col(meltwater_df, 'Hit Sentence') # Specific for Meltwater text
-        mw['original_url'] = get_specific_col(meltwater_df, 'URL') # Use 'URL' for Meltwater as per provided example data
-        mw['timestamp_share'] = get_specific_col(meltwater_df, 'Date') # Specific for Meltwater
+        mw['account_id'] = get_specific_col(meltwater_df, 'influencer') # Changed to lowercase
+        mw['content_id'] = get_specific_col(meltwater_df, 'tweet id')   # Changed to lowercase
+        mw['object_id'] = get_specific_col(meltwater_df, 'hit sentence')# Changed to lowercase
+        mw['original_url'] = get_specific_col(meltwater_df, 'url')      # Changed to lowercase
+        mw['timestamp_share'] = get_specific_col(meltwater_df, 'date')  # Changed to lowercase
         mw['source_dataset'] = 'Meltwater'
         combined_dfs.append(mw)
 
     # Process CivicSignals (Media Data)
     if civicsignals_df is not None and not civicsignals_df.empty:
+        # Convert all column names to lowercase for robust lookup
+        civicsignals_df.columns = civicsignals_df.columns.str.lower()
         cs = pd.DataFrame()
-        cs['account_id'] = get_specific_col(civicsignals_df, 'media_name')
-        cs['content_id'] = get_specific_col(civicsignals_df, 'stories_id')
-        cs['object_id'] = get_specific_col(civicsignals_df, 'title') # Specific for CivicSignals text
-        cs['original_url'] = get_specific_col(civicsignals_df, 'url') # Use 'url' for CivicSignals as per provided example data
-        cs['timestamp_share'] = get_specific_col(civicsignals_df, 'publish_date') # Specific for CivicSignals
+        cs['account_id'] = get_specific_col(civicsignals_df, 'media_name')   # Changed to lowercase
+        cs['content_id'] = get_specific_col(civicsignals_df, 'stories_id')   # Changed to lowercase
+        cs['object_id'] = get_specific_col(civicsignals_df, 'title')        # Changed to lowercase
+        cs['original_url'] = get_specific_col(civicsignals_df, 'url')       # Changed to lowercase
+        cs['timestamp_share'] = get_specific_col(civicsignals_df, 'publish_date') # Changed to lowercase
         cs['source_dataset'] = 'CivicSignals'
         combined_dfs.append(cs)
 
     # Process Open-Measure (optional)
     if openmeasure_df is not None and not openmeasure_df.empty:
+        # Convert all column names to lowercase for robust lookup
+        openmeasure_df.columns = openmeasure_df.columns.str.lower()
         om = pd.DataFrame()
-        om['account_id'] = get_specific_col(openmeasure_df, 'actor_username')
-        om['content_id'] = get_specific_col(openmeasure_df, 'id')
-        om['object_id'] = get_specific_col(openmeasure_df, 'text') # Specific for Open-Measure text
-        om['original_url'] = get_specific_col(openmeasure_df, 'url')
-        om['timestamp_share'] = get_specific_col(openmeasure_df, 'created_at') # Specific for Open-Measure
+        om['account_id'] = get_specific_col(openmeasure_df, 'actor_username') # Changed to lowercase
+        om['content_id'] = get_specific_col(openmeasure_df, 'id')             # Changed to lowercase
+        om['object_id'] = get_specific_col(openmeasure_df, 'text')            # Changed to lowercase
+        om['original_url'] = get_specific_col(openmeasure_df, 'url')          # Changed to lowercase
+        om['timestamp_share'] = get_specific_col(openmeasure_df, 'created_at')# Changed to lowercase
         om['source_dataset'] = 'OpenMeasure'
         combined_dfs.append(om)
 
@@ -495,34 +503,63 @@ if data_source == "Use Default Datasets":
     if combined_raw_df.empty:
         st.warning("No data loaded from default datasets.")
         st.stop()
-    st.sidebar.success(f"✅ Combined {len(combined_raw_df)} posts from Meltwater and CivicSignals.")
+    st.sidebar.success(f"✅ Combined {len(combined_raw_df)} posts from Meltwater and CivicSignal.")
 
 elif data_source == "Upload CSV Files":
     st.sidebar.info("Upload CSVs from Meltwater, CivicSignal, and/or Open-Measure")
 
     uploaded_meltwater = st.sidebar.file_uploader("Upload Meltwater CSV", type=["csv"], key="meltwater")
-    uploaded_civicsignals = st.sidebar.file_uploader("Upload CivicSignals CSV", type=["csv", "zip"], key="civicsignals") # Added zip support
+    uploaded_civicsignals = st.sidebar.file_uploader("Upload CivicSignals CSV", type=["csv", "zip"], key="civicsignals")
     uploaded_openmeasure = st.sidebar.file_uploader("Upload Open-Measure CSV", type=["csv"], key="openmeasure")
 
-    meltwater_df_upload = pd.read_csv(uploaded_meltwater) if uploaded_meltwater else pd.DataFrame()
-    
+    meltwater_df_upload = pd.DataFrame()
     civicsignals_df_upload = pd.DataFrame()
+    openmeasure_df_upload = pd.DataFrame()
+
+    if uploaded_meltwater:
+        try:
+            # Specific parameters for Meltwater as requested
+            meltwater_df_upload = pd.read_csv(uploaded_meltwater, encoding='utf-16', sep='\t', low_memory=False)
+        except UnicodeDecodeError:
+            st.error("Meltwater CSV: Encoding error. Please ensure the file is saved with UTF-16 encoding and tab-separated. If issues persist, try UTF-8 or Latin-1.")
+            st.stop()
+        except Exception as e:
+            st.error(f"Error reading Meltwater CSV: {e}")
+            st.stop()
+
     if uploaded_civicsignals:
         if uploaded_civicsignals.type == "application/zip":
             st.sidebar.warning("Zip file uploaded for CivicSignals. Please ensure it contains a single CSV or extract manually.")
-            # For simplicity, assuming a single CSV within the zip for now or user extracts
-            # You might need to add more complex logic here to handle multiple files in a zip
+            # Advanced: You would need to use `zipfile` module to extract and read the CSV from here.
+            # For this example, we'll assume the user extracts it or uploads a single CSV.
         else:
-            civicsignals_df_upload = pd.read_csv(uploaded_civicsignals)
+            try:
+                # Defaulting to utf-16 based on previous error, but without sep/low_memory unless specified
+                civicsignals_df_upload = pd.read_csv(uploaded_civicsignals, encoding='utf-16') 
+            except UnicodeDecodeError:
+                st.error("CivicSignals CSV: Encoding error. Please try saving the file with UTF-16 encoding. If issues persist, try Latin-1 or UTF-8.")
+                st.stop()
+            except Exception as e:
+                st.error(f"Error reading CivicSignals CSV: {e}")
+                st.stop()
             
-    openmeasure_df_upload = pd.read_csv(uploaded_openmeasure) if uploaded_openmeasure else pd.DataFrame()
+    if uploaded_openmeasure:
+        try:
+            # Defaulting to utf-16 based on previous error, but without sep/low_memory unless specified
+            openmeasure_df_upload = pd.read_csv(uploaded_openmeasure, encoding='utf-16') 
+        except UnicodeDecodeError:
+            st.error("Open-Measure CSV: Encoding error. Please try saving the file with UTF-16 encoding. If issues persist, try Latin-1 or UTF-8.")
+            st.stop()
+        except Exception as e:
+            st.error(f"Error reading Open-Measure CSV: {e}")
+            st.stop()
 
     if not meltwater_df_upload.empty or not civicsignals_df_upload.empty or not openmeasure_df_upload.empty:
         with st.spinner("Combining uploaded datasets..."):
             combined_raw_df = combine_social_media_data(meltwater_df_upload, civicsignals_df_upload, openmeasure_df_upload)
         st.sidebar.success(f"✅ Combined {len(combined_raw_df)} posts from uploaded files.")
     else:
-        st.warning("Please upload at least one CSV file.")
+        st.warning("Please upload at least one CSV file to proceed.")
         st.stop()
 
 # --- Final Preprocess (after combining) ---
@@ -697,7 +734,7 @@ with tab2:
     """)
     
     st.markdown("---")
-    st.subheader("Filters for Analysis)")
+    st.subheader("Filters for Analysis")
     available_platforms_analysis = filtered_df_global['Platform'].dropna().astype(str).unique().tolist()
     platforms_analysis = st.multiselect(
         "Platforms to include in Similarity Analysis:",
