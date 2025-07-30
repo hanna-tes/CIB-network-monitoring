@@ -87,7 +87,8 @@ def load_default_datasets():
 
     for key, url in urls.items():
         try:
-            df = pd.read_csv(url)
+            # Removed explicit encoding from default load as well for consistency
+            df = pd.read_csv(url, sep=',') 
             if not df.empty:
                 if key == "meltwater":
                     meltwater_df = df
@@ -506,7 +507,7 @@ if data_source == "Use Default Datasets":
     st.sidebar.success(f"✅ Combined {len(combined_raw_df)} posts from Meltwater and CivicSignal.")
 
 elif data_source == "Upload CSV Files":
-    st.sidebar.info("Upload CSVs from Meltwater, CivicSignals, and/or Open-Measure")
+    st.sidebar.info("Upload CSVs from Meltwater, CivicSignal, and/or Open-Measure")
 
     uploaded_meltwater = st.sidebar.file_uploader("Upload Meltwater CSV", type=["csv"], key="meltwater")
     uploaded_civicsignals = st.sidebar.file_uploader("Upload CivicSignals CSV", type=["csv", "zip"], key="civicsignals")
@@ -520,23 +521,10 @@ elif data_source == "Upload CSV Files":
         bytes_data = uploaded_meltwater.getvalue()
         df_meltwater = pd.DataFrame()
         
-        read_success = False
-        # Meltwater specific attempts: ONLY comma-separated, prioritize UTF-8 then default
-        attempts = [
-            {'sep': ',', 'encoding': 'utf-8', 'name': 'comma-separated UTF-8'},
-            {'sep': ',', 'encoding': None, 'name': 'comma-separated (default encoding)'}
-        ]
-
-        for i, attempt in enumerate(attempts):
-            try:
-                df_meltwater = pd.read_csv(BytesIO(bytes_data), sep=attempt['sep'], encoding=attempt['encoding'], low_memory=False)
-                st.sidebar.success(f"✅ Meltwater CSV loaded successfully with {attempt['name']}.")
-                read_success = True
-                break
-            except Exception as e:
-                st.sidebar.warning(f"Attempt {i+1} for Meltwater ({attempt['name']}) failed: {e}")
-        
-        if read_success:
+        try:
+            # Removed encoding parameter, letting pandas infer, but kept sep=','
+            df_meltwater = pd.read_csv(BytesIO(bytes_data), sep=',', low_memory=False)
+            st.sidebar.success(f"✅ Meltwater CSV loaded successfully with auto-detected encoding (comma-separated).")
             meltwater_df_upload = df_meltwater
             st.write("Meltwater DataFrame Head:")
             st.dataframe(meltwater_df_upload.head())
@@ -544,8 +532,8 @@ elif data_source == "Upload CSV Files":
             buffer = StringIO()
             meltwater_df_upload.info(buf=buffer)
             st.text(buffer.getvalue())
-        else:
-            st.error("❌ All attempts to read Meltwater CSV failed. Please check the file's format and encoding.")
+        except Exception as e:
+            st.error(f"❌ Failed to read Meltwater CSV. Please ensure it is comma-separated: {e}")
             st.stop()
 
 
@@ -555,23 +543,10 @@ elif data_source == "Upload CSV Files":
         else:
             bytes_data = uploaded_civicsignals.getvalue()
             df_civicsignals = pd.DataFrame()
-            read_success = False
-            # CivicSignals specific attempts: ONLY comma-separated, prioritize UTF-8 then default
-            attempts = [
-                {'sep': ',', 'encoding': 'utf-8', 'name': 'comma-separated UTF-8'},
-                {'sep': ',', 'encoding': None, 'name': 'comma-separated (default encoding)'}
-            ]
-
-            for i, attempt in enumerate(attempts):
-                try:
-                    df_civicsignals = pd.read_csv(BytesIO(bytes_data), sep=attempt['sep'], encoding=attempt['encoding'])
-                    st.sidebar.success(f"✅ CivicSignals CSV loaded successfully with {attempt['name']}.")
-                    read_success = True
-                    break
-                except Exception as e:
-                    st.sidebar.warning(f"Attempt {i+1} for CivicSignals ({attempt['name']}) failed: {e}")
-
-            if read_success:
+            try:
+                # Removed encoding parameter, letting pandas infer, but kept sep=','
+                df_civicsignals = pd.read_csv(BytesIO(bytes_data), sep=',')
+                st.sidebar.success(f"✅ CivicSignals CSV loaded successfully with auto-detected encoding (comma-separated).")
                 civicsignals_df_upload = df_civicsignals
                 st.write("CivicSignals DataFrame Head:")
                 st.dataframe(civicsignals_df_upload.head())
@@ -579,30 +554,17 @@ elif data_source == "Upload CSV Files":
                 buffer = StringIO()
                 civicsignals_df_upload.info(buf=buffer)
                 st.text(buffer.getvalue())
-            else:
-                st.error("❌ All attempts to read CivicSignals CSV failed. Please ensure it's a valid CSV with correct delimiter and encoding.")
+            except Exception as e:
+                st.error(f"❌ Failed to read CivicSignals CSV. Please ensure it is comma-separated: {e}")
                 st.stop()
             
     if uploaded_openmeasure:
         bytes_data = uploaded_openmeasure.getvalue()
         df_openmeasure = pd.DataFrame()
-        read_success = False
-        # Open-Measure specific attempts: ONLY comma-separated, prioritize UTF-8 then default
-        attempts = [
-            {'sep': ',', 'encoding': 'utf-8', 'name': 'comma-separated UTF-8'},
-            {'sep': ',', 'encoding': None, 'name': 'comma-separated (default encoding)'}
-        ]
-
-        for i, attempt in enumerate(attempts):
-            try:
-                df_openmeasure = pd.read_csv(BytesIO(bytes_data), sep=attempt['sep'], encoding=attempt['encoding'])
-                st.sidebar.success(f"✅ Open-Measure CSV loaded successfully with {attempt['name']}.")
-                read_success = True
-                break
-            except Exception as e:
-                st.sidebar.warning(f"Attempt {i+1} for Open-Measure ({attempt['name']}) failed: {e}")
-
-        if read_success:
+        try:
+            # Removed encoding parameter, letting pandas infer, but kept sep=','
+            df_openmeasure = pd.read_csv(BytesIO(bytes_data), sep=',')
+            st.sidebar.success(f"✅ Open-Measure CSV loaded successfully with auto-detected encoding (comma-separated).")
             openmeasure_df_upload = df_openmeasure
             st.write("Open-Measure DataFrame Head:")
             st.dataframe(openmeasure_df_upload.head())
@@ -610,8 +572,8 @@ elif data_source == "Upload CSV Files":
             buffer = StringIO()
             openmeasure_df_upload.info(buf=buffer)
             st.text(buffer.getvalue())
-        else:
-            st.error("❌ All attempts to read Open-Measure CSV failed. Please ensure it's a valid CSV with correct delimiter and encoding.")
+        except Exception as e:
+            st.error(f"❌ Failed to read Open-Measure CSV. Please ensure it is comma-separated: {e}")
             st.stop()
 
 
@@ -713,7 +675,7 @@ tab1, tab2, tab3 = st.tabs(["📊 Overview", "🔍 Analysis", "🌐 Network & Ri
 with tab1:
     st.subheader("📌 Summary Statistics")
 
-    st.markdown("### 🔬 Preprocessed Data Sample (for debugging column values)")
+    st.markdown("### 🔬 Preprocessed Data Sample")
     st.write("This table shows a small sample of the preprocessed data, displaying core identifiers for verification.")
     
     # Display only the requested core columns here
@@ -795,7 +757,7 @@ with tab2:
     """)
     
     st.markdown("---")
-    st.subheader("Filters for Analysis)")
+    st.subheader("Filters for Analysis")
     available_platforms_analysis = filtered_df_global['Platform'].dropna().astype(str).unique().tolist()
     platforms_analysis = st.multiselect(
         "Platforms to include in Similarity Analysis:",
@@ -1150,7 +1112,7 @@ with tab3:
                 st.write("This bar chart identifies influencers who frequently appear in coordinated messages based on text similarity, suggesting they might be high-risk accounts.")
                 fig_hr = px.bar(
                     high_risk,
-                    title="Influencers in ≥3 Coordinated Messages",
+                    title="Influencers in ≥3 Coordinated Messages (Original Posts Only)",
                     labels={'value': 'Coordination Instances', 'index': 'account_id'},
                     color='value',
                     color_continuous_scale='Reds'
