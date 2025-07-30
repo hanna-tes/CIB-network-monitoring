@@ -10,7 +10,7 @@ from sklearn.metrics.pairwise import cosine_similarity
 from sklearn.cluster import DBSCAN
 from itertools import combinations
 import re
-from io import StringIO
+from io import StringIO, BytesIO # Import BytesIO for robust byte-level file reading
 import csv
 
 # --- Set Page Config ---
@@ -29,7 +29,7 @@ def infer_platform_from_url(url):
         return "Facebook"
     elif "twitter.com" in url or "x.com" in url:
         return "X"
-    elif "youtube.com" in url or "youtu.be" in url: # More robust YouTube detection
+    elif "youtube.com" in url or "youtu.be" in url or "youtube.com" in url: # More robust YouTube detection
         return "YouTube"
     elif "instagram.com" in url:
         return "Instagram"
@@ -518,40 +518,65 @@ elif data_source == "Upload CSV Files":
 
     if uploaded_meltwater:
         try:
-            # Specific parameters for Meltwater as requested
-            meltwater_df_upload = pd.read_csv(uploaded_meltwater, encoding='utf-16', sep='\t', low_memory=False)
-        except UnicodeDecodeError:
-            st.error("Meltwater CSV: Encoding error. Please ensure the file is saved with UTF-16 encoding and tab-separated. If issues persist, try UTF-8 or Latin-1.")
-            st.stop()
+            bytes_data = uploaded_meltwater.getvalue()
+            # Try UTF-16 first, then Latin-1 as fallback
+            try:
+                meltwater_df_upload = pd.read_csv(BytesIO(bytes_data), encoding='utf-16', sep='\t', low_memory=False)
+                st.sidebar.success(f"✅ Meltwater CSV loaded successfully with UTF-16 encoding.")
+            except UnicodeDecodeError:
+                st.warning("Meltwater CSV: UTF-16 decoding failed. Trying Latin-1 as fallback.")
+                meltwater_df_upload = pd.read_csv(BytesIO(bytes_data), encoding='latin-1', sep='\t', low_memory=False)
+                st.sidebar.success(f"✅ Meltwater CSV loaded successfully with Latin-1 encoding (fallback).")
+            st.write("Meltwater DataFrame Head:")
+            st.dataframe(meltwater_df_upload.head())
+            st.write("Meltwater DataFrame Info:")
+            meltwater_df_upload.info(buf=StringIO())
+            st.text(StringIO().getvalue())
         except Exception as e:
-            st.error(f"Error reading Meltwater CSV: {e}")
+            st.error(f"Error reading Meltwater CSV: {e}. Please ensure it's a valid CSV with correct separator and encoding.")
             st.stop()
 
     if uploaded_civicsignals:
         if uploaded_civicsignals.type == "application/zip":
             st.sidebar.warning("Zip file uploaded for CivicSignals. Please ensure it contains a single CSV or extract manually.")
-            # Advanced: You would need to use `zipfile` module to extract and read the CSV from here.
-            # For this example, we'll assume the user extracts it or uploads a single CSV.
         else:
             try:
-                # Defaulting to utf-16 based on previous error, but without sep/low_memory unless specified
-                civicsignals_df_upload = pd.read_csv(uploaded_civicsignals, encoding='utf-16') 
-            except UnicodeDecodeError:
-                st.error("CivicSignals CSV: Encoding error. Please try saving the file with UTF-16 encoding. If issues persist, try Latin-1 or UTF-8.")
-                st.stop()
+                bytes_data = uploaded_civicsignals.getvalue()
+                # Try UTF-16 first, then Latin-1 as fallback
+                try:
+                    civicsignals_df_upload = pd.read_csv(BytesIO(bytes_data), encoding='utf-16')
+                    st.sidebar.success(f"✅ CivicSignals CSV loaded successfully with UTF-16 encoding.")
+                except UnicodeDecodeError:
+                    st.warning("CivicSignals CSV: UTF-16 decoding failed. Trying Latin-1 as fallback.")
+                    civicsignals_df_upload = pd.read_csv(BytesIO(bytes_data), encoding='latin-1')
+                    st.sidebar.success(f"✅ CivicSignals CSV loaded successfully with Latin-1 encoding (fallback).")
+                st.write("CivicSignals DataFrame Head:")
+                st.dataframe(civicsignals_df_upload.head())
+                st.write("CivicSignals DataFrame Info:")
+                civicsignals_df_upload.info(buf=StringIO())
+                st.text(StringIO().getvalue())
             except Exception as e:
-                st.error(f"Error reading CivicSignals CSV: {e}")
+                st.error(f"Error reading CivicSignals CSV: {e}. Please ensure it's a valid CSV with correct encoding.")
                 st.stop()
             
     if uploaded_openmeasure:
         try:
-            # Defaulting to utf-16 based on previous error, but without sep/low_memory unless specified
-            openmeasure_df_upload = pd.read_csv(uploaded_openmeasure, encoding='utf-16') 
-        except UnicodeDecodeError:
-            st.error("Open-Measure CSV: Encoding error. Please try saving the file with UTF-16 encoding. If issues persist, try Latin-1 or UTF-8.")
-            st.stop()
+            bytes_data = uploaded_openmeasure.getvalue()
+            # Try UTF-16 first, then Latin-1 as fallback
+            try:
+                openmeasure_df_upload = pd.read_csv(BytesIO(bytes_data), encoding='utf-16')
+                st.sidebar.success(f"✅ Open-Measure CSV loaded successfully with UTF-16 encoding.")
+            except UnicodeDecodeError:
+                st.warning("Open-Measure CSV: UTF-16 decoding failed. Trying Latin-1 as fallback.")
+                openmeasure_df_upload = pd.read_csv(BytesIO(bytes_data), encoding='latin-1')
+                st.sidebar.success(f"✅ Open-Measure CSV loaded successfully with Latin-1 encoding (fallback).")
+            st.write("Open-Measure DataFrame Head:")
+            st.dataframe(openmeasure_df_upload.head())
+            st.write("Open-Measure DataFrame Info:")
+            openmeasure_df_upload.info(buf=StringIO())
+            st.text(StringIO().getvalue())
         except Exception as e:
-            st.error(f"Error reading Open-Measure CSV: {e}")
+            st.error(f"Error reading Open-Measure CSV: {e}. Please ensure it's a valid CSV with correct encoding.")
             st.stop()
 
     if not meltwater_df_upload.empty or not civicsignals_df_upload.empty or not openmeasure_df_upload.empty:
@@ -784,7 +809,7 @@ with tab2:
             st.write("This table summarizes the top coordinated narratives, including the number of shares, involved influencers, and the platforms they appeared on.")
             st.dataframe(narrative_summary)
             
-            st.markdown("### 🔄 Full Similarity Pairs (Original Posts Only)")
+            st.markdown("### 🔄 Full Similarity Pairs")
             st.write("This table lists all detected pairs of similar texts between *original posts*, along with their influencers, platforms, timestamps, similarity scores, and links to the original posts for verification.")
 
             display_sim_df = sim_df[['text1', 'account_id1', 'platform1', 'timestamp_share1', 'url1', 'text2', 'account_id2', 'platform2', 'timestamp_share2', 'url2', 'similarity']].copy()
