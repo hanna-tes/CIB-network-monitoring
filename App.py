@@ -506,7 +506,7 @@ if data_source == "Use Default Datasets":
     st.sidebar.success(f"✅ Combined {len(combined_raw_df)} posts from Meltwater and CivicSignal.")
 
 elif data_source == "Upload CSV Files":
-    st.sidebar.info("Upload CSVs from Meltwater, CivicSignal, and/or Open-Measure")
+    st.sidebar.info("Upload CSVs from Meltwater, CivicSignals, and/or Open-Measure")
 
     uploaded_meltwater = st.sidebar.file_uploader("Upload Meltwater CSV", type=["csv"], key="meltwater")
     uploaded_civicsignals = st.sidebar.file_uploader("Upload CivicSignals CSV", type=["csv", "zip"], key="civicsignals")
@@ -517,67 +517,103 @@ elif data_source == "Upload CSV Files":
     openmeasure_df_upload = pd.DataFrame()
 
     if uploaded_meltwater:
-        try:
-            bytes_data = uploaded_meltwater.getvalue()
-            # Try UTF-16 first, then Latin-1 as fallback
+        bytes_data = uploaded_meltwater.getvalue()
+        df_meltwater = pd.DataFrame()
+        
+        read_success = False
+        # Meltwater specific attempts: ONLY comma-separated, prioritize UTF-8 then default
+        attempts = [
+            {'sep': ',', 'encoding': 'utf-8', 'name': 'comma-separated UTF-8'},
+            {'sep': ',', 'encoding': None, 'name': 'comma-separated (default encoding)'}
+        ]
+
+        for i, attempt in enumerate(attempts):
             try:
-                meltwater_df_upload = pd.read_csv(BytesIO(bytes_data), encoding='utf-16', sep='\t', low_memory=False)
-                st.sidebar.success(f"✅ Meltwater CSV loaded successfully with UTF-16 encoding.")
-            except UnicodeDecodeError:
-                st.warning("Meltwater CSV: UTF-16 decoding failed. Trying Latin-1 as fallback.")
-                meltwater_df_upload = pd.read_csv(BytesIO(bytes_data), encoding='latin-1', sep='\t', low_memory=False)
-                st.sidebar.success(f"✅ Meltwater CSV loaded successfully with Latin-1 encoding (fallback).")
+                df_meltwater = pd.read_csv(BytesIO(bytes_data), sep=attempt['sep'], encoding=attempt['encoding'], low_memory=False)
+                st.sidebar.success(f"✅ Meltwater CSV loaded successfully with {attempt['name']}.")
+                read_success = True
+                break
+            except Exception as e:
+                st.sidebar.warning(f"Attempt {i+1} for Meltwater ({attempt['name']}) failed: {e}")
+        
+        if read_success:
+            meltwater_df_upload = df_meltwater
             st.write("Meltwater DataFrame Head:")
             st.dataframe(meltwater_df_upload.head())
             st.write("Meltwater DataFrame Info:")
-            meltwater_df_upload.info(buf=StringIO())
-            st.text(StringIO().getvalue())
-        except Exception as e:
-            st.error(f"Error reading Meltwater CSV: {e}. Please ensure it's a valid CSV with correct separator and encoding.")
+            buffer = StringIO()
+            meltwater_df_upload.info(buf=buffer)
+            st.text(buffer.getvalue())
+        else:
+            st.error("❌ All attempts to read Meltwater CSV failed. Please check the file's format and encoding.")
             st.stop()
+
 
     if uploaded_civicsignals:
         if uploaded_civicsignals.type == "application/zip":
             st.sidebar.warning("Zip file uploaded for CivicSignals. Please ensure it contains a single CSV or extract manually.")
         else:
-            try:
-                bytes_data = uploaded_civicsignals.getvalue()
-                # Try UTF-16 first, then Latin-1 as fallback
+            bytes_data = uploaded_civicsignals.getvalue()
+            df_civicsignals = pd.DataFrame()
+            read_success = False
+            # CivicSignals specific attempts: ONLY comma-separated, prioritize UTF-8 then default
+            attempts = [
+                {'sep': ',', 'encoding': 'utf-8', 'name': 'comma-separated UTF-8'},
+                {'sep': ',', 'encoding': None, 'name': 'comma-separated (default encoding)'}
+            ]
+
+            for i, attempt in enumerate(attempts):
                 try:
-                    civicsignals_df_upload = pd.read_csv(BytesIO(bytes_data), encoding='utf-16')
-                    st.sidebar.success(f"✅ CivicSignals CSV loaded successfully with UTF-16 encoding.")
-                except UnicodeDecodeError:
-                    st.warning("CivicSignals CSV: UTF-16 decoding failed. Trying Latin-1 as fallback.")
-                    civicsignals_df_upload = pd.read_csv(BytesIO(bytes_data), encoding='latin-1')
-                    st.sidebar.success(f"✅ CivicSignals CSV loaded successfully with Latin-1 encoding (fallback).")
+                    df_civicsignals = pd.read_csv(BytesIO(bytes_data), sep=attempt['sep'], encoding=attempt['encoding'])
+                    st.sidebar.success(f"✅ CivicSignals CSV loaded successfully with {attempt['name']}.")
+                    read_success = True
+                    break
+                except Exception as e:
+                    st.sidebar.warning(f"Attempt {i+1} for CivicSignals ({attempt['name']}) failed: {e}")
+
+            if read_success:
+                civicsignals_df_upload = df_civicsignals
                 st.write("CivicSignals DataFrame Head:")
                 st.dataframe(civicsignals_df_upload.head())
-                st.write("CivicSignals DataFrame Info:")
-                civicsignals_df_upload.info(buf=StringIO())
-                st.text(StringIO().getvalue())
-            except Exception as e:
-                st.error(f"Error reading CivicSignals CSV: {e}. Please ensure it's a valid CSV with correct encoding.")
+                st.write("Civicsignals DataFrame Info:")
+                buffer = StringIO()
+                civicsignals_df_upload.info(buf=buffer)
+                st.text(buffer.getvalue())
+            else:
+                st.error("❌ All attempts to read CivicSignals CSV failed. Please ensure it's a valid CSV with correct delimiter and encoding.")
                 st.stop()
             
     if uploaded_openmeasure:
-        try:
-            bytes_data = uploaded_openmeasure.getvalue()
-            # Try UTF-16 first, then Latin-1 as fallback
+        bytes_data = uploaded_openmeasure.getvalue()
+        df_openmeasure = pd.DataFrame()
+        read_success = False
+        # Open-Measure specific attempts: ONLY comma-separated, prioritize UTF-8 then default
+        attempts = [
+            {'sep': ',', 'encoding': 'utf-8', 'name': 'comma-separated UTF-8'},
+            {'sep': ',', 'encoding': None, 'name': 'comma-separated (default encoding)'}
+        ]
+
+        for i, attempt in enumerate(attempts):
             try:
-                openmeasure_df_upload = pd.read_csv(BytesIO(bytes_data), encoding='utf-16')
-                st.sidebar.success(f"✅ Open-Measure CSV loaded successfully with UTF-16 encoding.")
-            except UnicodeDecodeError:
-                st.warning("Open-Measure CSV: UTF-16 decoding failed. Trying Latin-1 as fallback.")
-                openmeasure_df_upload = pd.read_csv(BytesIO(bytes_data), encoding='latin-1')
-                st.sidebar.success(f"✅ Open-Measure CSV loaded successfully with Latin-1 encoding (fallback).")
+                df_openmeasure = pd.read_csv(BytesIO(bytes_data), sep=attempt['sep'], encoding=attempt['encoding'])
+                st.sidebar.success(f"✅ Open-Measure CSV loaded successfully with {attempt['name']}.")
+                read_success = True
+                break
+            except Exception as e:
+                st.sidebar.warning(f"Attempt {i+1} for Open-Measure ({attempt['name']}) failed: {e}")
+
+        if read_success:
+            openmeasure_df_upload = df_openmeasure
             st.write("Open-Measure DataFrame Head:")
             st.dataframe(openmeasure_df_upload.head())
             st.write("Open-Measure DataFrame Info:")
-            openmeasure_df_upload.info(buf=StringIO())
-            st.text(StringIO().getvalue())
-        except Exception as e:
-            st.error(f"Error reading Open-Measure CSV: {e}. Please ensure it's a valid CSV with correct encoding.")
+            buffer = StringIO()
+            openmeasure_df_upload.info(buf=buffer)
+            st.text(buffer.getvalue())
+        else:
+            st.error("❌ All attempts to read Open-Measure CSV failed. Please ensure it's a valid CSV with correct delimiter and encoding.")
             st.stop()
+
 
     if not meltwater_df_upload.empty or not civicsignals_df_upload.empty or not openmeasure_df_upload.empty:
         with st.spinner("Combining uploaded datasets..."):
@@ -677,7 +713,7 @@ tab1, tab2, tab3 = st.tabs(["📊 Overview", "🔍 Analysis", "🌐 Network & Ri
 with tab1:
     st.subheader("📌 Summary Statistics")
 
-    st.markdown("### 🔬 Preprocessed Data Sample")
+    st.markdown("### 🔬 Preprocessed Data Sample (for debugging column values)")
     st.write("This table shows a small sample of the preprocessed data, displaying core identifiers for verification.")
     
     # Display only the requested core columns here
@@ -759,7 +795,7 @@ with tab2:
     """)
     
     st.markdown("---")
-    st.subheader("Filters for Analysis")
+    st.subheader("Filters for Analysis)")
     available_platforms_analysis = filtered_df_global['Platform'].dropna().astype(str).unique().tolist()
     platforms_analysis = st.multiselect(
         "Platforms to include in Similarity Analysis:",
@@ -809,7 +845,7 @@ with tab2:
             st.write("This table summarizes the top coordinated narratives, including the number of shares, involved influencers, and the platforms they appeared on.")
             st.dataframe(narrative_summary)
             
-            st.markdown("### 🔄 Full Similarity Pairs")
+            st.markdown("### 🔄 Full Similarity Pairs (Original Posts Only)")
             st.write("This table lists all detected pairs of similar texts between *original posts*, along with their influencers, platforms, timestamps, similarity scores, and links to the original posts for verification.")
 
             display_sim_df = sim_df[['text1', 'account_id1', 'platform1', 'timestamp_share1', 'url1', 'text2', 'account_id2', 'platform2', 'timestamp_share2', 'url2', 'similarity']].copy()
@@ -1114,7 +1150,7 @@ with tab3:
                 st.write("This bar chart identifies influencers who frequently appear in coordinated messages based on text similarity, suggesting they might be high-risk accounts.")
                 fig_hr = px.bar(
                     high_risk,
-                    title="Influencers in ≥3 Coordinated Messages (Original Posts Only)",
+                    title="Influencers in ≥3 Coordinated Messages",
                     labels={'value': 'Coordination Instances', 'index': 'account_id'},
                     color='value',
                     color_continuous_scale='Reds'
