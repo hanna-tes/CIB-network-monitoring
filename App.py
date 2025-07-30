@@ -567,65 +567,130 @@ with tab1:
 with tab2:
     st.subheader("🧠 Narrative Detection & Coordination")
     st.markdown("""
-        This section helps identify **coordination** by finding very similar messages posted by different influencers.
-        When different accounts share very similar messages, it can suggest they are working together or amplifying the same ideas.
-        A high similarity score (close to 1.0) means the texts are almost identical.
-        **Important:** Only original posts (not retweets or quoted tweets) are considered for this analysis to ensure meaningful similarity comparisons.
+        This section identifies **potential coordination** by detecting very similar messages posted across different influencers.
+        A high similarity score (close to 1.0) indicates nearly identical text.
+        Only **original posts** (not retweets or quoted tweets) are analyzed.
+        Each narrative is shown **once**, with all involved accounts listed.
     """)
     st.markdown("---")
     st.subheader("Filters for Analysis")
+    
+    available_platforms_analysis = filtered_df_global['Platform'].dropna().astype(str).unique().tolist()
     platforms_analysis = st.multiselect(
         "Platforms to include in Similarity Analysis:",
-        options=filtered_df_global['Platform'].dropna().astype(str).unique().tolist(),
-        default=filtered_df_global['Platform'].dropna().astype(str).unique().tolist(),
+        options=available_platforms_analysis,
+        default=available_platforms_analysis,
         key="platforms_analysis_tab2"
     )
     analysis_df_filtered_by_platform = filtered_df_global[filtered_df_global['Platform'].isin(platforms_analysis)].copy()
-    MAX_ROWS_SIMILARITY = st.slider("Max posts to analyze for similarity (for performance)", 100, 1000, 300, key="max_rows_similarity")
+    
+    MAX_ROWS_SIMILARITY = st.slider(
+        "Max posts to analyze for similarity (for performance)",
+        100, 1000, 300,
+        key="max_rows_similarity"
+    )
+    
     analysis_df = analysis_df_filtered_by_platform[
         (analysis_df_filtered_by_platform['original_text'].notna()) &
         (analysis_df_filtered_by_platform['original_text'].astype(str).str.strip() != "")
     ].head(MAX_ROWS_SIMILARITY).copy()
-
+    
     if analysis_df.empty:
-        st.info("No valid text data available for similarity analysis after applying filters and row limit.")
+        st.info("No valid text data available for similarity analysis after filtering.")
     else:
         with st.spinner(f"🔍 Finding coordinated narratives among {len(analysis_df)} original posts..."):
-            sim_df = cached_similarity_analysis(
-                analysis_df,
-                threshold=0.85,
-                data_source="upload" if data_source == "Upload CSV Files" else "default"
-            )
+            sim_df = cached_similarity_analysis(analysis_df, threshold=0.85)
+        
         if not sim_df.empty:
-            st.success(f"✅ Found {len(sim_df)} similar pairs between original posts.")
-            narrative_summary = sim_df.groupby('shared_narrative').agg(
-                share_count=('similarity', 'count'),
-                account_ids_involved=('account_id1', lambda x: ", ".join(x.astype(str).unique()[:5]) + ("..." if len(x.unique()) > 5 else ""))
-            ).sort_values(by='share_count', ascending=False).reset_index()
+            st.success(f"✅ Found {len(sim_df)} similar pairs.")
+
+            # --- Deduplicate Pairs: Ensure (A,B) and (B,A) are treated as one ---
+            def make_canonical_pair(row):
+                a1, a2 = sorted([row['account_id1'], row['account_id2']])
+                return f"{a1} ↔ {a2}"
+
+            sim_df['canonical_pair'] = sim_df.apply(make_canonical_pair, axis=1)
+
+            # --- Group by Narrative ---
+            narrative_summary = sim_df.groupby('shared_narrative', group_keys=False).apply(
+                lambda group: pd.Series({
+                    'share_count': len(group),
+                    'unique_influencers': ", ".join(
+                        pd.concat([group['account_id1'], group['account_id2']]).dropna().unique()
+                    ),
+                    'influencer_count': pd.concat([group['account_id1'], group['account_id2']]).dropna().nunique(),
+                    'platforms_involved': ", ".join(sorted(set(
+                        p.strip() for sublist in group['platforms_involved'].tolist() for p in sublist.split(',') if p.strip()
+                    ))),
+                    'example_url': group.iloc[0]['url1'] or group.iloc[0]['url2'],
+                    'canonical_pairs': ", ".join(group['canonical_pair'].unique()),
+                })
+            ).reset_index()
+
+            # Sort by number of shares
+            narrative_summary = narrative_summary.sort_values(by='share_count', ascending=False).reset_index(drop=True)
+
+            # --- Add Syndication Detection ---
+            def is_likely_syndicated(text):
+                syndicated_keywords = [
+                    'afp sport picks', 'by afp', 'reuters reports', 'ap news', 'via ap', 'via reuters',
+                    'press release', 'staff writer', 'correspondent', 'special to', 'for the record'
+                ]
+                return any(kw in text.lower() for kw in syndicated_keywords)
+
+            narrative_summary['likely_syndicated'] = narrative_summary['shared_narrative'].apply(is_likely_syndicated)
+            narrative_summary['display_label'] = np.where(
+                narrative_summary['likely_syndicated'],
+                "🔁 Syndicated (AFP/Reuters/etc.)",
+                "🚨 Potential CIB Coordination"
+            )
+
+            # Add label color for visual clarity
+            narrative_summary['label_color'] = np.where(
+                narrative_summary['likely_syndicated'],
+                "gray",
+                "red"
+            )
 
             st.markdown("### 🔝 Top Coordinated Narratives")
-            st.write("This bar chart shows the top 10 narrative snippets that are shared across multiple posts, indicating potential coordination.")
+            st.write("Each row represents a unique narrative snippet shared across multiple posts. Duplicate pairs are removed.")
+
             fig_nar = px.bar(
                 narrative_summary.head(10),
                 x='share_count',
                 y='shared_narrative',
                 orientation='h',
                 title="Top 10 Most Shared Narratives",
-                labels={'shared_narrative': 'Narrative Snippet', 'share_count': 'Share Count'},
-                color='share_count',
-                color_continuous_scale='Blues'
+                labels={'shared_narrative': 'Narrative Snippet', 'share_count': 'Total Shares'},
+                color='display_label',
+                color_discrete_map={"🔁 Syndicated (AFP/Reuters/etc.)": "gray", "🚨 Potential CIB Coordination": "red"},
+                hover_data=['unique_influencers', 'platforms_involved']
             )
             st.plotly_chart(fig_nar, use_container_width=True)
 
-            st.write("This table summarizes the top coordinated narratives, including the number of shares, involved influencers, and the platforms they appeared on.")
-            st.dataframe(narrative_summary)
+            # Display grouped table
+            st.markdown("### 📊 Narrative Summary Table")
+            st.write("All influencers and platforms involved in each coordinated narrative are listed. Syndicated content is labeled accordingly.")
+            st.dataframe(
+                narrative_summary.style.format({
+                    'example_url': lambda x: f'<a href="{x}" target="_blank">View Example</a>' if x and x.startswith('http') else ''
+                }),
+                column_config={
+                    "example_url": st.column_config.LinkColumn("Example Link"),
+                    "display_label": st.column_config.TextColumn("Risk Level", width="medium")
+                },
+                unsafe_allow_html=True
+            )
 
-            st.markdown("### 🔄 Full Similarity Pairs (Original Posts Only)")
-            st.write("This table lists all detected pairs of similar texts between *original posts*, along with their influencers, platforms, timestamps, similarity scores, and links to the original posts for verification.")
-            display_sim_df = sim_df[['text1', 'account_id1', 'platform1', 'timestamp_share1', 'url1', 'text2', 'account_id2', 'platform2', 'timestamp_share2', 'url2', 'similarity']].copy()
+            # Optional: Show full deduplicated pair list
+            st.markdown("### 🔄 Unique Similarity Pairs (Deduplicated)")
+            st.write("Each unique influencer pair appears only once per narrative.")
+            unique_pairs = sim_df.drop_duplicates(subset=['canonical_pair', 'shared_narrative'])
+            display_sim_df = unique_pairs[['text1', 'account_id1', 'platform1', 'timestamp_share1', 'url1', 'text2', 'account_id2', 'platform2', 'timestamp_share2', 'url2', 'similarity']].copy()
             display_sim_df['url1'] = display_sim_df['url1'].apply(lambda x: f'<a href="{x}" target="_blank">{x}</a>' if pd.notna(x) and x.startswith('http') else '')
             display_sim_df['url2'] = display_sim_df['url2'].apply(lambda x: f'<a href="{x}" target="_blank">{x}</a>' if pd.notna(x) and x.startswith('http') else '')
             st.markdown(display_sim_df.to_html(escape=False), unsafe_allow_html=True)
+
         else:
             st.info("No significant similarities found above threshold between original posts.")
 
@@ -634,32 +699,38 @@ with tab3:
     st.subheader("🚨 High-Risk Accounts & Networks")
     st.markdown("---")
     st.subheader("Filters for Analysis")
+
+    available_platforms_network = filtered_df_global['Platform'].dropna().astype(str).unique().tolist()
     platforms_network = st.multiselect(
         "Platforms to include in Network & Risk Analysis:",
-        options=filtered_df_global['Platform'].dropna().astype(str).unique().tolist(),
-        default=filtered_df_global['Platform'].dropna().astype(str).unique().tolist(),
+        options=available_platforms_network,
+        default=available_platforms_network,
         key="platforms_network_tab3"
     )
     network_df_filtered_by_platform = filtered_df_global[filtered_df_global['Platform'].isin(platforms_network)].copy()
+
     coordination_basis = st.radio(
         "Choose basis for Coordination and Network Analysis:",
         ("Text Content (Narrative Similarity)", "Shared URLs"),
         key="coordination_basis_selector"
     )
 
-    clustered_df = pd.DataFrame()
+    # Use preprocessed 'account_id' and 'object_id' for all analysis
+    G, pos, cluster_map = nx.Graph(), {}, {}
+
     if coordination_basis == "Text Content (Narrative Similarity)":
         df_for_clustering = network_df_filtered_by_platform[
             (network_df_filtered_by_platform['original_text'].notna()) &
             (network_df_filtered_by_platform['original_text'].astype(str).str.strip() != "")
         ].copy()
-        if not df_for_clustering.empty:
-            clustered_df = cached_clustering(
-                df_for_clustering,
-                data_source="upload" if data_source == "Upload CSV Files" else "default"
-            )
-        else:
+
+        if df_for_clustering.empty:
             st.info("No valid text data for clustering.")
+            clustered_df = pd.DataFrame()
+        else:
+            clustered_df = cached_clustering(df_for_clustering)
+    else:
+        clustered_df = pd.DataFrame()
 
     max_influencers_graph = st.slider(
         "Max Influencers for Network Graph (for performance)",
@@ -668,7 +739,6 @@ with tab3:
         key="max_influencers_graph"
     )
 
-    G, pos, cluster_map = nx.Graph(), {}, {}
     graph_df_subset = None
 
     if coordination_basis == "Text Content (Narrative Similarity)" and not clustered_df.empty:
@@ -685,8 +755,7 @@ with tab3:
     if graph_df_subset is not None and not graph_df_subset.empty:
         G, pos, cluster_map = cached_network_graph(
             graph_df_subset,
-            coordination_type="text" if coordination_basis == "Text Content (Narrative Similarity)" else "url",
-            data_source="upload" if data_source == "Upload CSV Files" else "default"
+            coordination_type="text" if coordination_basis == "Text Content (Narrative Similarity)" else "url"
         )
     else:
         st.info("No data available to build the network graph.")
@@ -694,13 +763,11 @@ with tab3:
     if G.nodes():
         st.markdown("### 🕸️ User Interaction Network")
         st.markdown("""
-            This interactive graph shows how different **influencers** (represented by **nodes** or circles) are connected.
-            A line (or **edge**) between two influencers means they have been identified as coordinating based on the selected method (either sharing very similar text content or sharing the exact same URLs).
-            **How to interpret the colors:**
-            The colors of the nodes are assigned automatically to visually group influencers that belong to the same detected cluster (for text-based coordination) or a similar group (for URL-based coordination).
-            For example, all influencers within the 'blue' group are part of one coordinated cluster, while those in the 'green' group belong to a different one.
-            The specific meaning of each color is not fixed (e.g., 'red' doesn't always mean the same thing across different analyses), but its purpose is to help you quickly see which influencers are working together on similar themes or sharing similar links.
+            This interactive graph shows how **influencers** are connected based on shared narratives or URLs.
+            **Node colors** indicate coordination groups (clusters).
+            **Larger nodes** represent influencers with more posts in the filtered dataset.
         """)
+
         edge_trace = []
         for edge in G.edges():
             x0, y0 = pos[edge[0]]
@@ -733,7 +800,7 @@ with tab3:
         node_trace = go.Scatter(
             x=[pos[node][0] for node in G.nodes()],
             y=[pos[node][1] for node in G.nodes()],
-            text=[f"Influencer: {node}<br>Posts in Graph: {influencer_post_counts.get(node, 0)}<br>Coordination Group: {G.nodes[node].get('cluster', 'N/A')}<br>Platform: {G.nodes[node].get('platform', 'N/A')}" for node in G.nodes()],
+            text=[f"Influencer: {node}<br>Posts: {influencer_post_counts.get(node, 0)}<br>Group: {G.nodes[node].get('cluster', 'N/A')}<br>Platform: {G.nodes[node].get('platform', 'N/A')}" for node in G.nodes()],
             mode='markers+text',
             textposition="top center",
             marker=dict(size=node_sizes_raw, color=node_color_vals, line=dict(width=2, color='darkblue')),
@@ -755,21 +822,33 @@ with tab3:
             st.markdown("#### Coordination Group Color Legend:")
             legend_items = [f"<span style='color:{color_map_for_plot[cluster_id]}'>●</span> Group: {cluster_id}" for cluster_id in unique_clusters]
             st.markdown("<br>".join(legend_items), unsafe_allow_html=True)
+    else:
+        st.info("No nodes to display in the network graph.")
 
+    # --- High-Risk Influencers ---
     st.markdown("### ⚠️ High-Risk Influencers")
     st.markdown("""
-        **High-risk influencers** are those who frequently participate in **coordination**.
-        This chart highlights influencers who appear in 3 or more **similar messages** (from the Similarity Analysis section), where only *original posts* are considered.
-        A high count here could indicate that an influencer is a central figure in spreading specific narratives or is part of a concentrated effort.
+        **High-risk influencers** are those who appear in **3 or more coordinated messages** (from the Similarity Analysis section).
+        This chart highlights influencers who may be central to coordinated campaigns.
     """)
+
     if 'sim_df' in locals() and not sim_df.empty:
         all_influencers = pd.concat([
             sim_df[['account_id1']].rename(columns={'account_id1': 'account_id'}),
             sim_df[['account_id2']].rename(columns={'account_id2': 'account_id'})
         ])['account_id'].dropna().value_counts()
+
         high_risk = all_influencers[all_influencers >= 3]
         if not high_risk.empty:
-            fig_hr = px.bar(high_risk, title="Influencers in ≥3 Coordinated Messages", labels={'value': 'Coordination Instances', 'index': 'account_id'}, color='value', color_continuous_scale='Reds')
+            fig_hr = px.bar(
+                high_risk,
+                title="Influencers in ≥3 Coordinated Messages",
+                labels={'value': 'Coordination Instances', 'index': 'account_id'},
+                color='value',
+                color_continuous_scale='Reds'
+            )
             st.plotly_chart(fig_hr, use_container_width=True)
         else:
-            st.info("No influencers found participating in 3 or more coordinated messages from original posts.")
+            st.info("No influencers found in 3+ coordinated messages.")
+    else:
+        st.info("No coordinated narratives detected.")
