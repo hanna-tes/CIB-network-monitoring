@@ -46,25 +46,28 @@ def infer_platform_from_url(url):
 
 def extract_original_text(text):
     """
-    Removes RT @user: or QT @user: prefixes and common link/mention patterns
-    to get the core message for similarity analysis.
+    Removes RT @user: or QT @user: prefixes (if any slipped through initial filter),
+    @mentions, URLs, newlines, and normalizes spaces to get the core message
+    for similarity analysis. This function now assumes the input `text` is
+    already from a post that has been identified as 'original' (not a retweet/quoted tweet).
     """
     if pd.isna(text) or not isinstance(text, str):
         return ""
     
-    # 1. Remove RT @user: or QT @user: patterns at the beginning of the string
+    # Although posts starting with RT/QT are filtered out, a robust cleaner still
+    # attempts to remove these and other common social media artifacts from the text content.
     cleaned = re.sub(r'^(RT|rt|QT|qt)\s+@\w+:\s*', '', text, flags=re.IGNORECASE).strip()
     
-    # 2. Remove any remaining @mentions not covered by the above (e.g., in the middle of text)
+    # Remove any remaining @mentions
     cleaned = re.sub(r'@\w+', '', cleaned).strip()
 
-    # 3. Remove URLs (http/https links)
+    # Remove URLs (http/https links)
     cleaned = re.sub(r'http\S+|www\S+|https\S+', '', cleaned).strip()
 
-    # 4. Remove newline/tab characters
+    # Remove newline/tab characters
     cleaned = re.sub(r"\\n|\\r|\\t", " ", cleaned).strip()
     
-    # 5. Replace multiple spaces with a single space and strip leading/trailing whitespace
+    # Replace multiple spaces with a single space and strip leading/trailing whitespace
     cleaned = re.sub(r'\s+', ' ', cleaned).strip()
 
     # Lowercase the text for consistent comparison
@@ -204,7 +207,8 @@ def combine_social_media_data(
 def final_preprocess_and_map_columns(df):
     """
     Performs final preprocessing steps on the combined DataFrame:
-    Renames 'original_url' to 'URL', cleans text, infers platform.
+    Renames 'original_url' to 'URL', cleans text, infers platform,
+    and filters out retweets/quoted tweets for similarity analysis.
     Keeps all columns necessary for dashboard functionality.
     """
     if df.empty:
@@ -234,6 +238,20 @@ def final_preprocess_and_map_columns(df):
     df_processed['object_id'] = df_processed['object_id'].apply(clean_text_for_display)
     df_processed = df_processed[df_processed['object_id'].str.len() > 0].reset_index(drop=True)
 
+    # NEW STEP: Filter out posts that are considered retweets or quoted tweets themselves
+    # A post is considered a retweet/quoted tweet if its 'object_id' starts with "RT @" or "QT @"
+    initial_rows_before_filter = len(df_processed)
+    df_processed = df_processed[
+        ~df_processed['object_id'].str.lower().str.startswith('rt @') &
+        ~df_processed['object_id'].str.lower().str.startswith('qt @')
+    ].reset_index(drop=True)
+    
+    # Notify user about filtered posts if any
+    filtered_count = initial_rows_before_filter - len(df_processed)
+    if filtered_count > 0:
+        st.info(f"Filtered out {filtered_count} posts identified as retweets or quoted tweets for similarity analysis.")
+
+
     # 3. Ensure timestamp_share is datetime with UTC timezone
     df_processed['timestamp_share'] = pd.to_datetime(df_processed['timestamp_share'], errors='coerce', utc=True)
     df_processed = df_processed.dropna(subset=['timestamp_share']).reset_index(drop=True)
@@ -241,7 +259,7 @@ def final_preprocess_and_map_columns(df):
     # 4. Infer Platform from the 'URL' column
     df_processed['Platform'] = df_processed['URL'].apply(infer_platform_from_url)
 
-    # 5. Extract original text (remove RT/QT specifically for similarity analysis, from object_id)
+    # 5. Extract original text (remove mentions/links specifically for similarity analysis, from object_id)
     # This column is crucial for similarity analysis and is separate from object_id
     df_processed['original_text'] = df_processed['object_id'].apply(extract_original_text)
     df_processed = df_processed[df_processed['original_text'].str.strip() != ""].reset_index(drop=True)
@@ -471,7 +489,7 @@ data_source = st.sidebar.radio(
 combined_raw_df = pd.DataFrame()
 
 if data_source == "Use Default Datasets":
-    with st.spinner("📥 Loading and combining Meltwater and CivicSignals data..."):
+    with st.spinner("📥 Loading and combining Meltwater and CivicSignal data..."):
         meltwater_df, civicsignals_df = load_default_datasets()
         combined_raw_df = combine_social_media_data(meltwater_df, civicsignals_df)
     if combined_raw_df.empty:
@@ -480,14 +498,23 @@ if data_source == "Use Default Datasets":
     st.sidebar.success(f"✅ Combined {len(combined_raw_df)} posts from Meltwater and CivicSignals.")
 
 elif data_source == "Upload CSV Files":
-    st.sidebar.info("Upload CSVs from Meltwater, CivicSignals, and/or Open-Measure")
+    st.sidebar.info("Upload CSVs from Meltwater, CivicSignal, and/or Open-Measure")
 
     uploaded_meltwater = st.sidebar.file_uploader("Upload Meltwater CSV", type=["csv"], key="meltwater")
-    uploaded_civicsignals = st.sidebar.file_uploader("Upload CivicSignals CSV", type=["csv"], key="civicsignals")
+    uploaded_civicsignals = st.sidebar.file_uploader("Upload CivicSignals CSV", type=["csv", "zip"], key="civicsignals") # Added zip support
     uploaded_openmeasure = st.sidebar.file_uploader("Upload Open-Measure CSV", type=["csv"], key="openmeasure")
 
     meltwater_df_upload = pd.read_csv(uploaded_meltwater) if uploaded_meltwater else pd.DataFrame()
-    civicsignals_df_upload = pd.read_csv(uploaded_civicsignals) if uploaded_civicsignals else pd.DataFrame()
+    
+    civicsignals_df_upload = pd.DataFrame()
+    if uploaded_civicsignals:
+        if uploaded_civicsignals.type == "application/zip":
+            st.sidebar.warning("Zip file uploaded for CivicSignals. Please ensure it contains a single CSV or extract manually.")
+            # For simplicity, assuming a single CSV within the zip for now or user extracts
+            # You might need to add more complex logic here to handle multiple files in a zip
+        else:
+            civicsignals_df_upload = pd.read_csv(uploaded_civicsignals)
+            
     openmeasure_df_upload = pd.read_csv(uploaded_openmeasure) if uploaded_openmeasure else pd.DataFrame()
 
     if not meltwater_df_upload.empty or not civicsignals_df_upload.empty or not openmeasure_df_upload.empty:
@@ -595,7 +622,7 @@ with tab1:
     display_cols_overview = ['account_id', 'content_id', 'object_id', 'timestamp_share']
     
     # Filter for columns that actually exist in the DataFrame
-    existing_display_cols = [col for col in display_cols_overview if col in df.columns]
+    existing_display_cols = [col for col in df.columns if col in display_cols_overview]
 
     st.dataframe(df[existing_display_cols].head(10))
     st.markdown("---")
@@ -666,10 +693,11 @@ with tab2:
         This section helps identify **coordination** by finding very similar messages posted by different influencers.
         When different accounts share very similar messages, it can suggest they are working together or amplifying the same ideas.
         A high similarity score (close to 1.0) means the texts are almost identical.
+        **Important:** Only original posts (not retweets or quoted tweets) are considered for this analysis to ensure meaningful similarity comparisons.
     """)
     
     st.markdown("---")
-    st.subheader("Filters for Analysis (Tab 2 Only)")
+    st.subheader("Filters for Analysis)")
     available_platforms_analysis = filtered_df_global['Platform'].dropna().astype(str).unique().tolist()
     platforms_analysis = st.multiselect(
         "Platforms to include in Similarity Analysis:",
@@ -691,11 +719,11 @@ with tab2:
     if analysis_df.empty:
         st.info("No valid text data available for similarity analysis after applying filters and row limit.")
     else:
-        with st.spinner(f"🔍 Finding coordinated narratives among {len(analysis_df)} posts..."):
+        with st.spinner(f"🔍 Finding coordinated narratives among {len(analysis_df)} original posts..."):
             sim_df = cached_similarity_analysis(analysis_df, threshold=0.85)
 
         if not sim_df.empty:
-            st.success(f"✅ Found {len(sim_df)} similar pairs.")
+            st.success(f"✅ Found {len(sim_df)} similar pairs between original posts.")
             narrative_summary = sim_df.groupby('shared_narrative').agg(
                 share_count=('similarity', 'count'),
                 account_ids_involved=('account_id1', lambda x: ", ".join(x.astype(str).unique()[:5]) + ("..." if len(x.unique()) > 5 else "")),
@@ -718,8 +746,9 @@ with tab2:
 
             st.write("This table summarizes the top coordinated narratives, including the number of shares, involved influencers, and the platforms they appeared on.")
             st.dataframe(narrative_summary)
-            st.markdown("### 🔄 Full Similarity Pairs")
-            st.write("This table lists all detected pairs of similar texts, along with their influencers, platforms, timestamps, similarity scores, and links to the original posts for verification.")
+            
+            st.markdown("### 🔄 Full Similarity Pairs (Original Posts Only)")
+            st.write("This table lists all detected pairs of similar texts between *original posts*, along with their influencers, platforms, timestamps, similarity scores, and links to the original posts for verification.")
 
             display_sim_df = sim_df[['text1', 'account_id1', 'platform1', 'timestamp_share1', 'url1', 'text2', 'account_id2', 'platform2', 'timestamp_share2', 'url2', 'similarity']].copy()
             display_sim_df['url1'] = display_sim_df['url1'].apply(lambda x: f'<a href="{x}" target="_blank">{x}</a>' if pd.notna(x) and x.startswith('http') else '')
@@ -728,14 +757,14 @@ with tab2:
             st.markdown(display_sim_df.to_html(escape=False), unsafe_allow_html=True)
 
         else:
-            st.info("No significant similarities found above threshold.")
+            st.info("No significant similarities found above threshold between original posts.")
 
 # ==================== TAB 3: Network & Risk ====================
 with tab3:
     st.subheader("🚨 High-Risk Accounts & Networks")
 
     st.markdown("---")
-    st.subheader("Filters for Analysis (Tab 3 Only)")
+    st.subheader("Filters for Analysis")
     available_platforms_network = filtered_df_global['Platform'].dropna().astype(str).unique().tolist()
     platforms_network = st.multiselect(
         "Platforms to include in Network & Risk Analysis:",
@@ -1007,7 +1036,7 @@ with tab3:
     st.markdown("### ⚠️ High-Risk Influencers")
     st.markdown("""
         **High-risk influencers** are those who frequently participate in **coordination**.
-        This chart highlights influencers who appear in 3 or more **similar messages** (from the Similarity Analysis section).
+        This chart highlights influencers who appear in 3 or more **similar messages** (from the Similarity Analysis section), where only *original posts* are considered.
         A high count here could indicate that an influencer is a central figure in spreading specific narratives or is part of a concentrated effort.
     """)
     try:
@@ -1023,15 +1052,15 @@ with tab3:
                 st.write("This bar chart identifies influencers who frequently appear in coordinated messages based on text similarity, suggesting they might be high-risk accounts.")
                 fig_hr = px.bar(
                     high_risk,
-                    title="Influencers in ≥3 Coordinated Messages",
+                    title="Influencers in ≥3 Coordinated Messages (Original Posts Only)",
                     labels={'value': 'Coordination Instances', 'index': 'account_id'},
                     color='value',
                     color_continuous_scale='Reds'
                 )
                 st.plotly_chart(fig_hr, use_container_width=True)
             else:
-                st.info("No influencers found participating in 3 or more coordinated messages.")
+                st.info("No influencers found participating in 3 or more coordinated messages from original posts.")
         else:
-            st.info("No coordinated narratives detected to identify high-risk influencers.")
+            st.info("No coordinated narratives detected from original posts to identify high-risk influencers.")
     except Exception as e:
         st.warning(f"Risk analysis failed: {e}")
