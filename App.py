@@ -545,7 +545,7 @@ elif data_source == "Upload CSV Files":
         bytes_data = uploaded_openmeasure.getvalue()
         try:
             # Removed encoding parameter, letting pandas infer, but kept sep=','
-            openmeasure_df_upload = pd.read_csv(BytesIO(bytes_data), sep=',')
+            openmeasure_df_upload = pd.read_csv(BytesIO(bytes_data), sep=',', low_memory=False)
             st.sidebar.success(f"✅ Open-Measure CSV loaded successfully with auto-detected encoding (comma-separated).")
         except Exception as e:
             st.error(f"❌ Failed to read Open-Measure CSV. Please ensure it is comma-separated: {e}")
@@ -666,6 +666,20 @@ with tab1:
 
     st.dataframe(df[existing_display_cols].head(10))
     st.markdown("---")
+
+    # NEW: Diagnostic for source_dataset
+    st.markdown("### 📊 Data Sources in Filtered Data")
+    if 'source_dataset' in filtered_df_global.columns:
+        st.write("This shows the count of posts from each original source dataset currently in your filtered view:")
+        source_counts = filtered_df_global['source_dataset'].value_counts()
+        if not source_counts.empty:
+            st.dataframe(source_counts)
+        else:
+            st.info("No source dataset information available in the filtered data.")
+    else:
+        st.info("The 'source_dataset' column is not available in the data.")
+    st.markdown("---")
+
 
     if not filtered_df_global.empty:
         st.write("This bar chart displays the top 10 influencers by their total number of posts within the filtered dataset.")
@@ -804,7 +818,7 @@ with tab3:
     st.subheader("🚨 High-Risk Accounts & Networks")
 
     st.markdown("---")
-    st.subheader("Filters for Analysis)")
+    st.subheader("Filters for Analysis")
     available_platforms_network = filtered_df_global['Platform'].dropna().astype(str).unique().tolist()
     platforms_network = st.multiselect(
         "Platforms to include in Network & Risk Analysis:",
@@ -1091,7 +1105,7 @@ with tab3:
             if not high_risk.empty:
                 fig_hr = px.bar(
                     high_risk,
-                    title="Influencers in ≥3 Coordinated Messages (Original Posts Only)",
+                    title="Influencers in ≥3 Coordinated Messages",
                     labels={'value': 'Coordination Instances', 'index': 'account_id'},
                     color='value',
                     color_continuous_scale='Reds'
