@@ -56,8 +56,19 @@ def extract_original_text(text):
     cleaned = re.sub(r'\s+', ' ', cleaned).strip()
     return cleaned.lower()
 
-# --- Combine Multiple Datasets ---
-def combine_social_media_data(meltwater_df, civicsignals_df, openmeasure_df=None):
+# --- Combine Multiple Datasets with Flexible Object Column ---
+def combine_social_media_data(
+    meltwater_df,
+    civicsignals_df,
+    openmeasure_df=None,
+    meltwater_object_col='hit sentence',   # Can be 'hit sentence', 'url'
+    civicsignals_object_col='title',       # Can be 'title', 'url'
+    openmeasure_object_col='text'          # Can be 'text', 'url'
+):
+    """
+    Combines datasets from Meltwater, CivicSignals, and Open-Measure (optional).
+    Allows specification of which column to use as 'object_id' for coordination analysis.
+    """
     combined_dfs = []
 
     def get_specific_col(df, col_name_lower):
@@ -65,34 +76,37 @@ def combine_social_media_data(meltwater_df, civicsignals_df, openmeasure_df=None
             return df[col_name_lower]
         return pd.Series([np.nan] * len(df), index=df.index)
 
+    # Process Meltwater
     if meltwater_df is not None and not meltwater_df.empty:
         meltwater_df.columns = meltwater_df.columns.str.lower()
         mw = pd.DataFrame()
         mw['account_id'] = get_specific_col(meltwater_df, 'influencer')
         mw['content_id'] = get_specific_col(meltwater_df, 'tweet id')
-        mw['object_id'] = get_specific_col(meltwater_df, 'hit sentence')
+        mw['object_id'] = get_specific_col(meltwater_df, meltwater_object_col.lower())
         mw['original_url'] = get_specific_col(meltwater_df, 'url')
         mw['timestamp_share'] = get_specific_col(meltwater_df, 'date')
         mw['source_dataset'] = 'Meltwater'
         combined_dfs.append(mw)
 
+    # Process CivicSignals
     if civicsignals_df is not None and not civicsignals_df.empty:
         civicsignals_df.columns = civicsignals_df.columns.str.lower()
         cs = pd.DataFrame()
         cs['account_id'] = get_specific_col(civicsignals_df, 'media_name')
         cs['content_id'] = get_specific_col(civicsignals_df, 'stories_id')
-        cs['object_id'] = get_specific_col(civicsignals_df, 'title')
+        cs['object_id'] = get_specific_col(civicsignals_df, civicsignals_object_col.lower())
         cs['original_url'] = get_specific_col(civicsignals_df, 'url')
         cs['timestamp_share'] = get_specific_col(civicsignals_df, 'publish_date')
         cs['source_dataset'] = 'CivicSignals'
         combined_dfs.append(cs)
 
+    # Process Open-Measure
     if openmeasure_df is not None and not openmeasure_df.empty:
         openmeasure_df.columns = openmeasure_df.columns.str.lower()
         om = pd.DataFrame()
         om['account_id'] = get_specific_col(openmeasure_df, 'actor_username')
         om['content_id'] = get_specific_col(openmeasure_df, 'id')
-        om['object_id'] = get_specific_col(openmeasure_df, 'text')
+        om['object_id'] = get_specific_col(openmeasure_df, openmeasure_object_col.lower())
         om['original_url'] = get_specific_col(openmeasure_df, 'url')
         om['timestamp_share'] = get_specific_col(openmeasure_df, 'created_at')
         om['source_dataset'] = 'OpenMeasure'
@@ -108,6 +122,7 @@ def combine_social_media_data(meltwater_df, civicsignals_df, openmeasure_df=None
     combined['original_url'] = combined['original_url'].astype(str).replace('nan', '').fillna('')
     combined['object_id'] = combined['object_id'].astype(str).replace('nan', '').fillna('')
 
+    # Robust timestamp parsing
     date_formats = [
         '%Y-%m-%dT%H:%M:%S.%fZ', '%Y-%m-%dT%H:%M:%SZ',
         '%Y-%m-%d %H:%M:%S.%f', '%Y-%m-%d %H:%M:%S',
@@ -169,6 +184,8 @@ def final_preprocess_and_map_columns(df):
     df_processed['timestamp_share'] = pd.to_datetime(df_processed['timestamp_share'], errors='coerce', utc=True)
     df_processed = df_processed.dropna(subset=['timestamp_share']).reset_index(drop=True)
     df_processed['Platform'] = df_processed['URL'].apply(infer_platform_from_url)
+
+    # Only clean for similarity if analyzing by text
     df_processed['original_text'] = df_processed['object_id'].apply(extract_original_text)
     df_processed = df_processed[df_processed['original_text'].str.strip() != ""].reset_index(drop=True)
 
@@ -325,20 +342,33 @@ def cached_clustering(_df, data_source="default"):
 def cached_network_graph(_df_for_graph, coordination_type="text", data_source="default"):
     return build_user_interaction_graph(_df_for_graph, coordination_type)
 
-# --- Sidebar: Data Source Selection ---
+# --- Sidebar: Data Source & Coordination Mode ---
 st.sidebar.header("📥 Data Source")
-
-# Add cache clearing button
-if st.sidebar.button("🧹 Clear All Caches"):
-    st.cache_data.clear()
-    st.rerun()
-
 data_source = st.sidebar.radio("Choose data source:", ("Use Default Datasets", "Upload CSV Files"))
 
-# Initialize combined_raw_df to ensure no leakage
+# NEW: Coordination Mode Selector
+st.sidebar.header("🎯 Coordination Analysis Mode")
+coordination_mode = st.sidebar.radio(
+    "Analyze coordination by:",
+    ("Text Content", "Shared URLs"),
+    help="Choose what defines a coordinated action: similar text messages or sharing the same external link."
+)
+
+# Map selection to column names
+OBJECT_COL_MAP = {
+    "meltwater": "hit sentence" if coordination_mode == "Text Content" else "url",
+    "civicsignals": "title" if coordination_mode == "Text Content" else "url",
+    "openmeasure": "text" if coordination_mode == "Text Content" else "url"
+}
+
+# Clear cache on mode change
+if 'last_coordination_mode' in st.session_state and st.session_state.last_coordination_mode != coordination_mode:
+    st.cache_data.clear()
+st.session_state.last_coordination_mode = coordination_mode
+
+# Load data
 combined_raw_df = pd.DataFrame()
 
-# Load default datasets ONLY if selected
 if data_source == "Use Default Datasets":
     with st.spinner("📥 Loading and combining Meltwater and CivicSignal data..."):
         base_url = "https://raw.githubusercontent.com/hanna-tes/CIB-network-monitoring/refs/heads/main/"
@@ -362,13 +392,17 @@ if data_source == "Use Default Datasets":
             except Exception as e:
                 st.sidebar.warning(f"⚠️ Failed to load {key}: {e}")
 
-        combined_raw_df = combine_social_media_data(meltwater_df, civicsignals_df)
+        combined_raw_df = combine_social_media_data(
+            meltwater_df, civicsignals_df, None,
+            meltwater_object_col=OBJECT_COL_MAP["meltwater"],
+            civicsignals_object_col=OBJECT_COL_MAP["civicsignals"],
+            openmeasure_object_col=OBJECT_COL_MAP["openmeasure"]
+        )
     if combined_raw_df.empty:
         st.warning("No data loaded from default datasets.")
         st.stop()
     st.sidebar.success(f"✅ Combined {len(combined_raw_df)} posts from default datasets.")
 
-# Upload path: NEVER load default data
 elif data_source == "Upload CSV Files":
     st.sidebar.info("Upload CSVs from Meltwater, CivicSignal, and/or Open-Measure")
     uploaded_meltwater = st.sidebar.file_uploader("Upload Meltwater CSV", type=["csv"], key="meltwater")
@@ -411,17 +445,21 @@ elif data_source == "Upload CSV Files":
             combined_raw_df = combine_social_media_data(
                 meltwater_df_upload if not meltwater_df_upload.empty else None,
                 civicsignals_df_upload if not civicsignals_df_upload.empty else None,
-                openmeasure_df_upload if not openmeasure_df_upload.empty else None
+                openmeasure_df_upload if not openmeasure_df_upload.empty else None,
+                meltwater_object_col=OBJECT_COL_MAP["meltwater"],
+                civicsignals_object_col=OBJECT_COL_MAP["civicsignals"],
+                openmeasure_object_col=OBJECT_COL_MAP["openmeasure"]
             )
         st.sidebar.success(f"✅ Combined {len(combined_raw_df)} posts from uploaded files.")
     else:
         st.warning("Please upload at least one CSV file to proceed.")
         st.stop()
 
-# --- Debug: Show data source and size ---
+# Debug
 st.sidebar.markdown("---")
-st.sidebar.markdown(f"**Loaded from:** `{data_source}`")
-st.sidebar.markdown(f"**Total rows after combine:** `{len(combined_raw_df):,}`")
+st.sidebar.markdown(f"**Mode:** `{coordination_mode}`")
+st.sidebar.markdown(f"**Source:** `{data_source}`")
+st.sidebar.markdown(f"**Rows after combine:** `{len(combined_raw_df):,}`")
 
 # --- Final Preprocess ---
 with st.spinner("⏳ Preprocessing and mapping combined data..."):
@@ -494,12 +532,11 @@ tab1, tab2, tab3 = st.tabs(["📊 Overview", "🔍 Analysis", "🌐 Network & Ri
 with tab1:
     st.subheader("📌 Summary Statistics")
     st.markdown("### 🔬 Preprocessed Data Sample")
-    st.markdown(f"**Data Source:** `{data_source}` | **Total Rows:** `{len(df):,}`")
+    st.markdown(f"**Data Source:** `{data_source}` | **Coordination Mode:** `{coordination_mode}` | **Total Rows:** `{len(df):,}`")
     display_cols_overview = ['account_id', 'content_id', 'object_id', 'timestamp_share']
     existing_cols = [col for col in df.columns if col in display_cols_overview]
     st.dataframe(df[existing_cols].head(10))
 
-    st.markdown("---")
     if 'source_dataset' in filtered_df_global.columns:
         st.markdown("### 📊 Data Sources in Filtered Data")
         source_counts = filtered_df_global['source_dataset'].value_counts()
@@ -540,104 +577,93 @@ with tab1:
 # ==================== TAB 2: Similarity & Coordination ====================
 with tab2:
     st.subheader("🧠 Narrative Detection & Coordination")
-    st.markdown("""
-        This section identifies **potential coordination** by detecting very similar messages posted across different influencers.
-        A high similarity score (close to 1.0) indicates nearly identical text.
-        Only **original posts** (not retweets or quoted tweets) are analyzed.
-        Each narrative is shown **once**, with all involved accounts listed.
-    """)
+    st.markdown(f"**Current Mode:** Analyzing coordination by **{coordination_mode}**")
     st.markdown("---")
-    st.subheader("Filters for Analysis")
 
-    available_platforms_analysis = filtered_df_global['Platform'].dropna().astype(str).unique().tolist()
-    platforms_analysis = st.multiselect(
-        "Platforms to include in Similarity Analysis:",
-        options=available_platforms_analysis,
-        default=available_platforms_analysis,
-        key="platforms_analysis_tab2"
-    )
-    analysis_df_filtered_by_platform = filtered_df_global[filtered_df_global['Platform'].isin(platforms_analysis)].copy()
+    if coordination_mode == "Text Content":
+        platforms_analysis = st.multiselect(
+            "Platforms to include in Similarity Analysis:",
+            options=filtered_df_global['Platform'].dropna().astype(str).unique().tolist(),
+            default=filtered_df_global['Platform'].dropna().astype(str).unique().tolist(),
+            key="platforms_analysis_tab2"
+        )
+        analysis_df_filtered_by_platform = filtered_df_global[filtered_df_global['Platform'].isin(platforms_analysis)].copy()
+        MAX_ROWS_SIMILARITY = st.slider("Max posts to analyze for similarity", 100, 1000, 300, key="max_rows_similarity")
 
-    MAX_ROWS_SIMILARITY = st.slider("Max posts to analyze for similarity", 100, 1000, 300, key="max_rows_similarity")
+        analysis_df = analysis_df_filtered_by_platform[
+            (analysis_df_filtered_by_platform['original_text'].notna()) &
+            (analysis_df_filtered_by_platform['original_text'].astype(str).str.strip() != "")
+        ].head(MAX_ROWS_SIMILARITY).copy()
 
-    analysis_df = analysis_df_filtered_by_platform[
-        (analysis_df_filtered_by_platform['original_text'].notna()) &
-        (analysis_df_filtered_by_platform['original_text'].astype(str).str.strip() != "")
-    ].head(MAX_ROWS_SIMILARITY).copy()
+        if not analysis_df.empty:
+            with st.spinner(f"🔍 Finding coordinated narratives among {len(analysis_df)} original posts..."):
+                sim_df = cached_similarity_analysis(
+                    analysis_df,
+                    threshold=0.85,
+                    data_source="upload" if data_source == "Upload CSV Files" else "default"
+                )
+            if not sim_df.empty:
+                st.success(f"✅ Found {len(sim_df)} similar pairs.")
 
-    if analysis_df.empty:
-        st.info("No valid text data for similarity analysis.")
-    else:
-        with st.spinner(f"🔍 Finding coordinated narratives among {len(analysis_df)} original posts..."):
-            sim_df = cached_similarity_analysis(
-                analysis_df,
-                threshold=0.85,
-                data_source="upload" if data_source == "Upload CSV Files" else "default"
-            )
+                def make_pair_key(row):
+                    a1, a2 = sorted([row['account_id1'], row['account_id2']])
+                    return f"{a1} ↔ {a2}"
 
-        if not sim_df.empty:
-            st.success(f"✅ Found {len(sim_df)} similar pairs.")
+                sim_df['pair_key'] = sim_df.apply(make_pair_key, axis=1)
 
-            # Deduplicate pairs: (A,B) and (B,A) → one canonical key
-            def make_pair_key(row):
-                a1, a2 = sorted([row['account_id1'], row['account_id2']])
-                return f"{a1} ↔ {a2}"
+                narrative_summary = sim_df.groupby('shared_narrative', group_keys=False).apply(
+                    lambda group: pd.Series({
+                        'share_count': len(group),
+                        'unique_influencers': ", ".join(pd.concat([group['account_id1'], group['account_id2']]).dropna().unique()),
+                        'influencer_count': pd.concat([group['account_id1'], group['account_id2']]).dropna().nunique(),
+                        'platforms_involved': ", ".join(sorted(set(p.strip() for sublist in group['platforms_involved'].tolist() for p in sublist.split(',')))),
+                        'example_url': group.iloc[0]['url1'] or group.iloc[0]['url2'],
+                    })
+                ).reset_index()
 
-            sim_df['pair_key'] = sim_df.apply(make_pair_key, axis=1)
+                narrative_summary = narrative_summary.sort_values(by='share_count', ascending=False).reset_index(drop=True)
 
-            # Group by narrative
-            narrative_summary = sim_df.groupby('shared_narrative', group_keys=False).apply(
-                lambda group: pd.Series({
-                    'share_count': len(group),
-                    'unique_influencers': ", ".join(pd.concat([group['account_id1'], group['account_id2']]).dropna().unique()),
-                    'influencer_count': pd.concat([group['account_id1'], group['account_id2']]).dropna().nunique(),
-                    'platforms_involved': ", ".join(sorted(set(
-                        p.strip() for sublist in group['platforms_involved'].tolist() for p in sublist.split(',') if p.strip()
-                    ))),
-                    'example_url': group.iloc[0]['url1'] or group.iloc[0]['url2'],
-                    'canonical_pairs': ", ".join(group['pair_key'].unique()),
-                })
-            ).reset_index()
+                def is_likely_syndicated(text):
+                    syndicated_keywords = ['afp sport picks', 'by afp', 'reuters reports', 'ap news']
+                    return any(kw in text.lower() for kw in syndicated_keywords)
 
-            narrative_summary = narrative_summary.sort_values(by='share_count', ascending=False).reset_index(drop=True)
+                narrative_summary['likely_syndicated'] = narrative_summary['shared_narrative'].apply(is_likely_syndicated)
+                narrative_summary['display_label'] = np.where(
+                    narrative_summary['likely_syndicated'],
+                    "🔁 Syndicated (AFP/Reuters/etc.)",
+                    "🚨 Potential CIB Coordination"
+                )
 
-            # Detect syndication
-            def is_likely_syndicated(text):
-                syndicated_keywords = ['afp sport picks', 'by afp', 'reuters reports', 'ap news', 'press release']
-                return any(kw in text.lower() for kw in syndicated_keywords)
+                st.markdown("### 🔝 Top Coordinated Narratives")
+                fig_nar = px.bar(
+                    narrative_summary.head(10),
+                    x='share_count',
+                    y='shared_narrative',
+                    orientation='h',
+                    title="Top 10 Most Shared Narratives",
+                    labels={'shared_narrative': 'Narrative Snippet', 'share_count': 'Share Count'},
+                    color='display_label',
+                    color_discrete_map={"🔁 Syndicated (AFP/Reuters/etc.)": "gray", "🚨 Potential CIB Coordination": "red"}
+                )
+                st.plotly_chart(fig_nar, use_container_width=True)
 
-            narrative_summary['likely_syndicated'] = narrative_summary['shared_narrative'].apply(is_likely_syndicated)
-            narrative_summary['display_label'] = np.where(
-                narrative_summary['likely_syndicated'],
-                "🔁 Syndicated (AFP/Reuters/etc.)",
-                "🚨 Potential CIB Coordination"
-            )
-
-            st.markdown("### 🔝 Top Coordinated Narratives")
-            fig_nar = px.bar(
-                narrative_summary.head(10),
-                x='share_count',
-                y='shared_narrative',
-                orientation='h',
-                title="Top 10 Most Shared Narratives",
-                labels={'shared_narrative': 'Narrative Snippet', 'share_count': 'Share Count'},
-                color='display_label',
-                color_discrete_map={"🔁 Syndicated (AFP/Reuters/etc.)": "gray", "🚨 Potential CIB Coordination": "red"}
-            )
-            st.plotly_chart(fig_nar, use_container_width=True)
-
-            st.markdown("### 📊 Narrative Summary Table")
-            st.data_editor(
-                narrative_summary,
-                column_config={
-                    "example_url": st.column_config.LinkColumn("Example Link"),
-                    "display_label": st.column_config.TextColumn("Risk Level"),
-                },
-                hide_index=True,
-                use_container_width=True
-            )
+                st.markdown("### 📊 Narrative Summary Table")
+                st.data_editor(
+                    narrative_summary,
+                    column_config={
+                        "example_url": st.column_config.LinkColumn("Example Link"),
+                        "display_label": st.column_config.TextColumn("Risk Level"),
+                    },
+                    hide_index=True,
+                    use_container_width=True
+                )
+            else:
+                st.info("No significant similarities found.")
         else:
-            st.info("No significant similarities found.")
+            st.info("No valid text data for similarity analysis.")
+
+    else:
+        st.info("Coordination by Shared URLs is analyzed in Tab 3.")
 
 # ==================== TAB 3: Network & Risk ====================
 with tab3:
@@ -769,3 +795,5 @@ with tab3:
             st.plotly_chart(fig_hr, use_container_width=True)
         else:
             st.info("No influencers in 3+ coordinated messages.")
+    else:
+        st.info("No coordinated narratives detected.")
