@@ -44,8 +44,10 @@ def infer_platform_from_url(url):
 
 def extract_original_text(text):
     """
-    Cleans text by removing RT/QT prefixes, @mentions, URLs, and normalizing spaces.
-    Used for similarity analysis.
+    Removes RT @user: or QT @user: prefixes (if any slipped through initial filter),
+    @mentions, URLs, newlines, and normalizes spaces to get the core message
+    for similarity analysis. This function now assumes the input `text` is
+    already from a post that has been identified as 'original' (not a retweet/quoted tweet).
     """
     if pd.isna(text) or not isinstance(text, str):
         return ""
@@ -184,12 +186,12 @@ def final_preprocess_and_map_columns(df):
 
     initial_rows_before_filter = len(df_processed)
     df_processed = df_processed[
-        ~df_processed['object_id'].str.startswith('rt @') &
-        ~df_processed['object_id'].str.startswith('qt @')
+        ~df_processed['object_id'].str.lower().str.startswith('rt @') &
+        ~df_processed['object_id'].str.lower().str.startswith('qt @')
     ].reset_index(drop=True)
     filtered_count = initial_rows_before_filter - len(df_processed)
     if filtered_count > 0:
-        st.info(f"Filtered out {filtered_count} retweets/quoted tweets.")
+        st.info(f"Filtered out {filtered_count} posts identified as retweets or quoted tweets for similarity analysis.")
 
     df_processed['timestamp_share'] = pd.to_datetime(df_processed['timestamp_share'], errors='coerce', utc=True)
     df_processed = df_processed.dropna(subset=['timestamp_share']).reset_index(drop=True)
@@ -203,7 +205,7 @@ def final_preprocess_and_map_columns(df):
         df_processed['Channel'] = np.nan
 
     if df_processed.empty:
-        st.error("❌ No valid data after preprocessing.")
+        st.error("❌ No valid data after complete preprocessing and filtering.")
         st.stop()
 
     return df_processed
@@ -211,11 +213,13 @@ def final_preprocess_and_map_columns(df):
 # --- Analysis Functions ---
 def cluster_texts(df, eps=0.3, min_samples=2):
     if 'original_text' not in df.columns:
+        st.error("Missing 'original_text' column for text clustering.")
         df_copy = df.copy()
         df_copy['cluster'] = -1
         return df_copy
     texts_to_cluster = df['original_text'].astype(str).tolist()
-    if not texts_to_cluster or all(t.strip() == "" for t in texts_to_cluster):
+    if not texts_to_cluster or all(text.strip() == "" for text in texts_to_cluster):
+        st.warning("No valid text data for clustering. Assigning all to cluster -1 (noise).")
         df_copy = df.copy()
         df_copy['cluster'] = -1
         return df_copy
@@ -223,6 +227,7 @@ def cluster_texts(df, eps=0.3, min_samples=2):
     try:
         tfidf_matrix = vectorizer.fit_transform(texts_to_cluster)
     except ValueError as e:
+        st.warning(f"Could not create TF-IDF matrix for clustering: {e}. Assigning all to cluster -1 (noise).")
         df_copy = df.copy()
         df_copy['cluster'] = -1
         return df_copy
@@ -238,6 +243,7 @@ def build_user_interaction_graph(df, coordination_type="text"):
 
     if coordination_type == "text":
         if 'cluster' not in df.columns:
+            st.error("Missing 'cluster' column for text-based network graph.")
             return G, {}, {}
         grouped = df.groupby('cluster')
         for cluster_id, group in grouped:
@@ -255,6 +261,7 @@ def build_user_interaction_graph(df, coordination_type="text"):
 
     elif coordination_type == "url":
         if 'URL' not in df.columns:
+            st.error("Missing 'URL' column for URL-based network graph.")
             return G, {}, {}
         url_groups = df.groupby('URL')
         for url_shared, group in url_groups:
@@ -264,7 +271,7 @@ def build_user_interaction_graph(df, coordination_type="text"):
             if len(users_sharing_url) < 2:
                 for user in users_sharing_url:
                     if user not in G:
-                        G.add_node(user)
+                        G.add_node(user, cluster=f"URL:{url_shared[:50]}...")
                 continue
             for u1, u2 in combinations(users_sharing_url, 2):
                 if G.has_edge(u1, u2):
@@ -280,11 +287,17 @@ def build_user_interaction_graph(df, coordination_type="text"):
             G.add_node(inf)
         G.nodes[inf]['platform'] = influencer_platform_map.get(inf, 'Unknown')
         if coordination_type == "text":
-            clusters = df[df[influencer_column] == inf]['cluster'].dropna()
-            G.nodes[inf]['cluster'] = clusters.mode()[0] if not clusters.empty else -2
+            influencer_clusters = df[df[influencer_column] == inf]['cluster'].dropna()
+            if not influencer_clusters.empty:
+                G.nodes[inf]['cluster'] = influencer_clusters.mode()[0]
+            else:
+                G.nodes[inf]['cluster'] = -2
         elif coordination_type == "url":
             shared_urls = df[(df[influencer_column] == inf) & df['URL'].notna() & (df['URL'].str.strip() != '')]['URL'].unique()
-            G.nodes[inf]['cluster'] = f"SharedURL_Group_{hash(tuple(sorted(shared_urls))) % 100}" if len(shared_urls) > 0 else "NoSharedURL"
+            if len(shared_urls) > 0:
+                G.nodes[inf]['cluster'] = f"SharedURL_Group_{hash(tuple(sorted(shared_urls))) % 100}"
+            else:
+                G.nodes[inf]['cluster'] = "NoSharedURL"
 
     pos = nx.spring_layout(G, seed=42, k=0.1, iterations=50)
     cluster_map = {node: G.nodes[node].get('cluster', -2) for node in G.nodes()}
@@ -297,12 +310,13 @@ def find_textual_similarities(df, threshold=0.85):
     clean_df = clean_df[clean_df['original_text'].str.strip() != ""].copy()
     texts = clean_df['original_text'].tolist()
     if len(texts) < 2:
+        st.info("Not enough valid texts for similarity analysis.")
         return pd.DataFrame()
     vectorizer = TfidfVectorizer(stop_words='english', max_features=10000)
     try:
         tfidf_matrix = vectorizer.fit_transform(texts)
     except ValueError as e:
-        st.warning(f"TF-IDF failed: {e}")
+        st.warning(f"Could not create TF-IDF matrix. Error: {e}. This might happen if all texts are very similar or empty after processing.")
         return pd.DataFrame()
     sim_matrix = cosine_similarity(tfidf_matrix)
     np.fill_diagonal(sim_matrix, 0)
@@ -317,9 +331,11 @@ def find_textual_similarities(df, threshold=0.85):
         seen.add(key)
         row1 = clean_df.iloc[i]
         row2 = clean_df.iloc[j]
-        snippet = row1['original_text'][:150] + ("..." if len(row1['original_text']) > 150 else "")
-        if not snippet.strip():
-            snippet = "Empty/Cleaned Text"
+        narrative_snippet = row1['original_text'][:150]
+        if len(row1['original_text']) > 150:
+            narrative_snippet += "..."
+        if not narrative_snippet.strip():
+            narrative_snippet = "Empty/Cleaned Text"
         similar_pairs.append({
             'text1': row1['original_text'],
             'account_id1': row1['account_id'],
@@ -332,7 +348,7 @@ def find_textual_similarities(df, threshold=0.85):
             'timestamp_share2': row2['timestamp_share'],
             'url2': row2['URL'],
             'similarity': round(sim_matrix[i, j], 3),
-            'shared_narrative': snippet,
+            'shared_narrative': narrative_snippet,
             'platforms_involved': f"{row1['Platform']},{row2['Platform']}"
         })
     return pd.DataFrame(similar_pairs)
@@ -354,6 +370,11 @@ def cached_network_graph(_df_for_graph, coordination_type="text", data_source="d
 st.sidebar.header("📥 Data Source")
 data_source = st.sidebar.radio("Choose data source:", ("Use Default Datasets", "Upload CSV Files"))
 
+# Add cache clearing button
+if st.sidebar.button("🧹 Clear All Caches"):
+    st.cache_data.clear()
+    st.rerun()
+
 combined_raw_df = pd.DataFrame()
 
 if data_source == "Use Default Datasets":
@@ -363,7 +384,7 @@ if data_source == "Use Default Datasets":
     if combined_raw_df.empty:
         st.warning("No data loaded from default datasets.")
         st.stop()
-    st.sidebar.success(f"✅ Combined {len(combined_raw_df)} posts from Meltwater and CivicSignal.")
+    st.sidebar.success(f"✅ Combined {len(combined_raw_df)} posts from default datasets.")
 
 elif data_source == "Upload CSV Files":
     st.sidebar.info("Upload CSVs from Meltwater, CivicSignal, and/or Open-Measure")
@@ -388,7 +409,7 @@ elif data_source == "Upload CSV Files":
         bytes_data = uploaded_civicsignals.getvalue()
         try:
             civicsignals_df_upload = pd.read_csv(BytesIO(bytes_data), sep=',')
-            st.sidebar.success("✅ CivicSignals CSV loaded.")
+            st.sidebar.success("✅ CivicSignal CSV loaded.")
         except Exception as e:
             st.error(f"❌ Failed to read CivicSignals CSV: {e}")
             st.stop()
@@ -413,6 +434,11 @@ elif data_source == "Upload CSV Files":
     else:
         st.warning("Please upload at least one CSV file to proceed.")
         st.stop()
+
+# --- Debug: Show data source and size ---
+st.sidebar.markdown("---")
+st.sidebar.markdown(f"**Loaded from:** `{data_source}`")
+st.sidebar.markdown(f"**Total rows after combine:** `{len(combined_raw_df):,}`")
 
 # --- Final Preprocess ---
 with st.spinner("⏳ Preprocessing and mapping combined data..."):
@@ -485,6 +511,7 @@ tab1, tab2, tab3 = st.tabs(["📊 Overview", "🔍 Analysis", "🌐 Network & Ri
 with tab1:
     st.subheader("📌 Summary Statistics")
     st.markdown("### 🔬 Preprocessed Data Sample")
+    st.markdown(f"**Data Source:** `{data_source}` | **Total Rows:** `{len(df):,}`")
     display_cols_overview = ['account_id', 'content_id', 'object_id', 'timestamp_share']
     existing_cols = [col for col in df.columns if col in display_cols_overview]
     st.dataframe(df[existing_cols].head(10))
@@ -492,37 +519,46 @@ with tab1:
     st.markdown("---")
     if 'source_dataset' in filtered_df_global.columns:
         st.markdown("### 📊 Data Sources in Filtered Data")
+        st.write("This shows the count of posts from each original source dataset currently in your filtered view:")
         source_counts = filtered_df_global['source_dataset'].value_counts()
         st.dataframe(source_counts)
 
     if not filtered_df_global.empty:
+        st.write("This bar chart displays the top 10 influencers by their total number of posts within the filtered dataset.")
         top_influencers = filtered_df_global['account_id'].value_counts().head(10)
         fig_src = px.bar(top_influencers, title="Top 10 Influencers", labels={'value': 'Posts', 'index': 'account_id'})
         st.plotly_chart(fig_src, use_container_width=True)
 
         if 'Platform' in filtered_df_global.columns:
+            st.write("This bar chart illustrates the distribution of posts across various social media and news/media platforms.")
             all_platforms_counts = filtered_df_global['Platform'].value_counts()
             fig_platform = px.bar(all_platforms_counts, title="Post Distribution by Platform", labels={'value': 'Posts', 'index': 'Platform'})
             st.plotly_chart(fig_platform, use_container_width=True)
 
         if 'Outlet' in filtered_df_global.columns and filtered_df_global['Outlet'].notna().any():
+            st.write("This bar chart shows the top 10 media outlets or channels where content was published.")
             top_outlets = filtered_df_global['Outlet'].value_counts().head(10)
             fig_outlet = px.bar(top_outlets, title="Top 10 Media Outlets/Channels", labels={'value': 'Posts', 'index': 'Outlet'})
             st.plotly_chart(fig_outlet, use_container_width=True)
         elif 'Channel' in filtered_df_global.columns and filtered_df_global['Channel'].notna().any():
+            st.write("This bar chart illustrates the top 10 channels where content was published.")
             top_channels = filtered_df_global['Channel'].value_counts().head(10)
             fig_chan = px.bar(top_channels, title="Top 10 Channels", labels={'value': 'Posts', 'index': 'Channel'})
             st.plotly_chart(fig_chan, use_container_width=True)
 
         social_media_df = filtered_df_global[~filtered_df_global['Platform'].isin(['Media', 'News/Media'])].copy()
         if not social_media_df.empty and 'object_id' in social_media_df.columns:
+            st.write("This bar chart highlights the top 10 most frequently used hashtags, focusing on social media content where hashtags are typically relevant.")
             social_media_df['hashtags'] = social_media_df['object_id'].astype(str).str.findall(r'#\w+').apply(lambda x: [tag.lower() for tag in x])
             all_hashtags = [tag for tags_list in social_media_df['hashtags'] if isinstance(tags_list, list) for tag in tags_list]
             if all_hashtags:
                 hashtag_counts = pd.Series(all_hashtags).value_counts().head(10)
                 fig_ht = px.bar(hashtag_counts, title="Top 10 Hashtags (Social Media Only)", labels={'value': 'Frequency', 'index': 'Hashtag'})
                 st.plotly_chart(fig_ht, use_container_width=True)
+            else:
+                st.info("No hashtags found in the social media 'object_id' column.")
 
+        st.write("This area chart visualizes the daily volume of posts over the selected date range.")
         time_series = filtered_df_global.set_index('timestamp_share').resample('D').size()
         fig_ts = px.area(time_series, title="Daily Post Volume", labels={'value': 'Number of Posts', 'timestamp_share': 'Date'})
         st.plotly_chart(fig_ts, use_container_width=True)
@@ -530,26 +566,30 @@ with tab1:
 # ==================== TAB 2: Similarity & Coordination ====================
 with tab2:
     st.subheader("🧠 Narrative Detection & Coordination")
-    st.markdown("This section identifies coordinated narratives using text similarity.")
+    st.markdown("""
+        This section helps identify **coordination** by finding very similar messages posted by different influencers.
+        When different accounts share very similar messages, it can suggest they are working together or amplifying the same ideas.
+        A high similarity score (close to 1.0) means the texts are almost identical.
+        **Important:** Only original posts (not retweets or quoted tweets) are considered for this analysis to ensure meaningful similarity comparisons.
+    """)
     st.markdown("---")
-
+    st.subheader("Filters for Analysis")
     platforms_analysis = st.multiselect(
         "Platforms to include in Similarity Analysis:",
         options=filtered_df_global['Platform'].dropna().astype(str).unique().tolist(),
         default=filtered_df_global['Platform'].dropna().astype(str).unique().tolist(),
         key="platforms_analysis_tab2"
     )
-
     analysis_df_filtered_by_platform = filtered_df_global[filtered_df_global['Platform'].isin(platforms_analysis)].copy()
-    MAX_ROWS_SIMILARITY = st.slider("Max posts to analyze for similarity", 100, 1000, 300, key="max_rows_similarity")
-
+    MAX_ROWS_SIMILARITY = st.slider("Max posts to analyze for similarity (for performance)", 100, 1000, 300, key="max_rows_similarity")
     analysis_df = analysis_df_filtered_by_platform[
         (analysis_df_filtered_by_platform['original_text'].notna()) &
         (analysis_df_filtered_by_platform['original_text'].astype(str).str.strip() != "")
     ].head(MAX_ROWS_SIMILARITY).copy()
 
-    sim_df = pd.DataFrame()
-    if not analysis_df.empty:
+    if analysis_df.empty:
+        st.info("No valid text data available for similarity analysis after applying filters and row limit.")
+    else:
         with st.spinner(f"🔍 Finding coordinated narratives among {len(analysis_df)} original posts..."):
             sim_df = cached_similarity_analysis(
                 analysis_df,
@@ -557,12 +597,14 @@ with tab2:
                 data_source="upload" if data_source == "Upload CSV Files" else "default"
             )
         if not sim_df.empty:
-            st.success(f"✅ Found {len(sim_df)} similar pairs.")
+            st.success(f"✅ Found {len(sim_df)} similar pairs between original posts.")
             narrative_summary = sim_df.groupby('shared_narrative').agg(
                 share_count=('similarity', 'count'),
                 account_ids_involved=('account_id1', lambda x: ", ".join(x.astype(str).unique()[:5]) + ("..." if len(x.unique()) > 5 else ""))
             ).sort_values(by='share_count', ascending=False).reset_index()
 
+            st.markdown("### 🔝 Top Coordinated Narratives")
+            st.write("This bar chart shows the top 10 narrative snippets that are shared across multiple posts, indicating potential coordination.")
             fig_nar = px.bar(
                 narrative_summary.head(10),
                 x='share_count',
@@ -574,29 +616,30 @@ with tab2:
                 color_continuous_scale='Blues'
             )
             st.plotly_chart(fig_nar, use_container_width=True)
+
+            st.write("This table summarizes the top coordinated narratives, including the number of shares, involved influencers, and the platforms they appeared on.")
             st.dataframe(narrative_summary)
-            st.markdown("### Full Similarity Pairs")
+
+            st.markdown("### 🔄 Full Similarity Pairs (Original Posts Only)")
+            st.write("This table lists all detected pairs of similar texts between *original posts*, along with their influencers, platforms, timestamps, similarity scores, and links to the original posts for verification.")
             display_sim_df = sim_df[['text1', 'account_id1', 'platform1', 'timestamp_share1', 'url1', 'text2', 'account_id2', 'platform2', 'timestamp_share2', 'url2', 'similarity']].copy()
             display_sim_df['url1'] = display_sim_df['url1'].apply(lambda x: f'<a href="{x}" target="_blank">{x}</a>' if pd.notna(x) and x.startswith('http') else '')
             display_sim_df['url2'] = display_sim_df['url2'].apply(lambda x: f'<a href="{x}" target="_blank">{x}</a>' if pd.notna(x) and x.startswith('http') else '')
             st.markdown(display_sim_df.to_html(escape=False), unsafe_allow_html=True)
         else:
-            st.info("No significant similarities found.")
-    else:
-        st.info("No valid text data for similarity analysis.")
+            st.info("No significant similarities found above threshold between original posts.")
 
 # ==================== TAB 3: Network & Risk ====================
 with tab3:
     st.subheader("🚨 High-Risk Accounts & Networks")
     st.markdown("---")
-
+    st.subheader("Filters for Analysis")
     platforms_network = st.multiselect(
         "Platforms to include in Network & Risk Analysis:",
         options=filtered_df_global['Platform'].dropna().astype(str).unique().tolist(),
         default=filtered_df_global['Platform'].dropna().astype(str).unique().tolist(),
         key="platforms_network_tab3"
     )
-
     network_df_filtered_by_platform = filtered_df_global[filtered_df_global['Platform'].isin(platforms_network)].copy()
     coordination_basis = st.radio(
         "Choose basis for Coordination and Network Analysis:",
@@ -605,8 +648,6 @@ with tab3:
     )
 
     clustered_df = pd.DataFrame()
-    G, pos, cluster_map = nx.Graph(), {}, {}
-
     if coordination_basis == "Text Content (Narrative Similarity)":
         df_for_clustering = network_df_filtered_by_platform[
             (network_df_filtered_by_platform['original_text'].notna()) &
@@ -619,9 +660,15 @@ with tab3:
             )
         else:
             st.info("No valid text data for clustering.")
-    # URL-based handled later
 
-    max_influencers_graph = st.slider("Max Influencers for Network Graph", 10, 200, 50, key="max_influencers_graph")
+    max_influencers_graph = st.slider(
+        "Max Influencers for Network Graph (for performance)",
+        min_value=10, max_value=200, value=50, step=10,
+        help="Limit the number of influencers displayed in the network graph to improve performance.",
+        key="max_influencers_graph"
+    )
+
+    G, pos, cluster_map = nx.Graph(), {}, {}
     graph_df_subset = None
 
     if coordination_basis == "Text Content (Narrative Similarity)" and not clustered_df.empty:
@@ -641,6 +688,19 @@ with tab3:
             coordination_type="text" if coordination_basis == "Text Content (Narrative Similarity)" else "url",
             data_source="upload" if data_source == "Upload CSV Files" else "default"
         )
+    else:
+        st.info("No data available to build the network graph.")
+
+    if G.nodes():
+        st.markdown("### 🕸️ User Interaction Network")
+        st.markdown("""
+            This interactive graph shows how different **influencers** (represented by **nodes** or circles) are connected.
+            A line (or **edge**) between two influencers means they have been identified as coordinating based on the selected method (either sharing very similar text content or sharing the exact same URLs).
+            **How to interpret the colors:**
+            The colors of the nodes are assigned automatically to visually group influencers that belong to the same detected cluster (for text-based coordination) or a similar group (for URL-based coordination).
+            For example, all influencers within the 'blue' group are part of one coordinated cluster, while those in the 'green' group belong to a different one.
+            The specific meaning of each color is not fixed (e.g., 'red' doesn't always mean the same thing across different analyses), but its purpose is to help you quickly see which influencers are working together on similar themes or sharing similar links.
+        """)
         edge_trace = []
         for edge in G.edges():
             x0, y0 = pos[edge[0]]
@@ -673,7 +733,7 @@ with tab3:
         node_trace = go.Scatter(
             x=[pos[node][0] for node in G.nodes()],
             y=[pos[node][1] for node in G.nodes()],
-            text=[f"Influencer: {node}<br>Posts: {influencer_post_counts.get(node, 0)}<br>Group: {G.nodes[node].get('cluster', 'N/A')}<br>Platform: {G.nodes[node].get('platform', 'N/A')}" for node in G.nodes()],
+            text=[f"Influencer: {node}<br>Posts in Graph: {influencer_post_counts.get(node, 0)}<br>Coordination Group: {G.nodes[node].get('cluster', 'N/A')}<br>Platform: {G.nodes[node].get('platform', 'N/A')}" for node in G.nodes()],
             mode='markers+text',
             textposition="top center",
             marker=dict(size=node_sizes_raw, color=node_color_vals, line=dict(width=2, color='darkblue')),
@@ -682,7 +742,7 @@ with tab3:
 
         fig_net = go.Figure(data=edge_trace + [node_trace],
                             layout=go.Layout(
-                                title="Influencer Coordination Network",
+                                title="Influencer Coordination Network (Click & Drag to Explore)",
                                 showlegend=False,
                                 hovermode='closest',
                                 margin=dict(b=20, l=5, r=5, t=60),
@@ -692,13 +752,16 @@ with tab3:
         st.plotly_chart(fig_net, use_container_width=True)
 
         if unique_clusters:
-            st.markdown("#### Group Color Legend:")
+            st.markdown("#### Coordination Group Color Legend:")
             legend_items = [f"<span style='color:{color_map_for_plot[cluster_id]}'>●</span> Group: {cluster_id}" for cluster_id in unique_clusters]
             st.markdown("<br>".join(legend_items), unsafe_allow_html=True)
-    else:
-        st.info("No data available to build the network graph.")
 
     st.markdown("### ⚠️ High-Risk Influencers")
+    st.markdown("""
+        **High-risk influencers** are those who frequently participate in **coordination**.
+        This chart highlights influencers who appear in 3 or more **similar messages** (from the Similarity Analysis section), where only *original posts* are considered.
+        A high count here could indicate that an influencer is a central figure in spreading specific narratives or is part of a concentrated effort.
+    """)
     if 'sim_df' in locals() and not sim_df.empty:
         all_influencers = pd.concat([
             sim_df[['account_id1']].rename(columns={'account_id1': 'account_id'}),
@@ -709,6 +772,4 @@ with tab3:
             fig_hr = px.bar(high_risk, title="Influencers in ≥3 Coordinated Messages", labels={'value': 'Coordination Instances', 'index': 'account_id'}, color='value', color_continuous_scale='Reds')
             st.plotly_chart(fig_hr, use_container_width=True)
         else:
-            st.info("No influencers in 3+ coordinated messages.")
-    else:
-        st.info("No coordinated narratives detected.")
+            st.info("No influencers found participating in 3 or more coordinated messages from original posts.")
