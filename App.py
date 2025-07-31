@@ -599,9 +599,21 @@ with tab1:
                 fig_ht = px.bar(hashtag_counts, title="Top 10 Hashtags (Social Media Only)", labels={'value': 'Frequency', 'index': 'Hashtag'})
                 st.plotly_chart(fig_ht, use_container_width=True)
 
-        time_series = filtered_df_global.set_index('timestamp_share').resample('D', origin='epoch').size()
-        time_series.index = pd.to_datetime(time_series.index, unit='s', utc=True)
-        fig_ts = px.area(time_series, title="Daily Post Volume", labels={'value': 'Number of Posts', 'timestamp_share': 'Date'})
+        # Convert UNIX timestamp to datetime for plotting
+        plot_df = filtered_df_global.copy()
+        plot_df['datetime'] = pd.to_datetime(plot_df['timestamp_share'], unit='s', utc=True)
+        plot_df = plot_df.set_index('datetime')
+        
+        # Resample by day
+        time_series = plot_df.resample('D').size()
+        
+        fig_ts = px.area(
+            time_series,
+            title="Daily Post Volume",
+            labels={'value': 'Number of Posts', 'datetime': 'Date'},
+            markers=True
+        )
+        fig_ts.update_layout(xaxis_title="Date", yaxis_title="Number of Posts")
         st.plotly_chart(fig_ts, use_container_width=True)
 
 # ==================== TAB 2: Similarity & Coordination ====================
