@@ -56,6 +56,48 @@ def extract_original_text(text):
     cleaned = re.sub(r'\s+', ' ', cleaned).strip()
     return cleaned.lower()
 
+# --- Robust Timestamp Parser: Returns UNIX Timestamp (Integer) ---
+def parse_timestamp_robust(timestamp):
+    """
+    Converts a timestamp string to a UNIX timestamp (integer seconds since epoch).
+    Returns None if parsing fails.
+    """
+    if pd.isna(timestamp):
+        return None
+    if isinstance(timestamp, (int, float)):
+        if 0 < timestamp < 253402300800:  # Valid range: 1970–9999
+            return int(timestamp)
+        else:
+            return None
+
+    # List of common timestamp formats
+    date_formats = [
+        '%Y-%m-%dT%H:%M:%S.%fZ', '%Y-%m-%dT%H:%M:%SZ',
+        '%Y-%m-%d %H:%M:%S.%f', '%Y-%m-%d %H:%M:%S',
+        '%d/%m/%Y %H:%M:%S', '%m/%d/%Y %H:%M:%S',
+        '%b %d, %Y @ %H:%M:%S.%f', '%d-%b-%Y %I:%M%p',
+        '%A, %d %b %Y %H:%M:%S', '%b %d, %I:%M%p', '%d %b %Y %I:%M%p',
+        '%Y-%m-%d', '%m/%d/%Y', '%d %b %Y',
+    ]
+
+    # Try direct parsing
+    try:
+        parsed = pd.to_datetime(timestamp, errors='coerce', utc=True)
+        if pd.notna(parsed):
+            return int(parsed.timestamp())
+    except:
+        pass
+
+    # Try each format
+    for fmt in date_formats:
+        try:
+            parsed = pd.to_datetime(timestamp, format=fmt, errors='coerce', utc=True)
+            if pd.notna(parsed):
+                return int(parsed.timestamp())
+        except (ValueError, TypeError):
+            continue
+    return None
+
 # --- Combine Multiple Datasets with Flexible Object Column ---
 def combine_social_media_data(
     meltwater_df,
@@ -68,6 +110,7 @@ def combine_social_media_data(
     """
     Combines datasets from Meltwater, CivicSignals, and Open-Measure (optional).
     Allows specification of which column to use as 'object_id' for coordination analysis.
+    Returns timestamp as UNIX integer.
     """
     combined_dfs = []
 
@@ -122,30 +165,11 @@ def combine_social_media_data(
     combined['original_url'] = combined['original_url'].astype(str).replace('nan', '').fillna('')
     combined['object_id'] = combined['object_id'].astype(str).replace('nan', '').fillna('')
 
-    # Robust timestamp parsing
-    date_formats = [
-        '%Y-%m-%dT%H:%M:%S.%fZ', '%Y-%m-%dT%H:%M:%SZ',
-        '%Y-%m-%d %H:%M:%S.%f', '%Y-%m-%d %H:%M:%S',
-        '%d/%m/%Y %H:%M:%S', '%m/%d/%Y %H:%M:%S',
-        '%b %d, %Y @ %H:%M:%S.%f', '%d-%b-%Y %I:%M%p',
-        '%A, %d %b %Y %H:%M:%S', '%b %d, %I:%M%p', '%d %b %Y %I:%M%p',
-        '%Y-%m-%d', '%m/%d/%Y', '%d %b %Y',
-    ]
-
-    def parse_timestamp_robust(timestamp):
-        if pd.isna(timestamp): return pd.NaT
-        if isinstance(timestamp, (int, float)): return pd.NaT
-        parsed = pd.to_datetime(timestamp, errors='coerce', utc=True)
-        if pd.notna(parsed): return parsed
-        for fmt in date_formats:
-            try:
-                parsed = pd.to_datetime(timestamp, format=fmt, errors='coerce', utc=True)
-                if pd.notna(parsed): return parsed
-            except (ValueError, TypeError): continue
-        return pd.NaT
-
+    # Convert timestamp to UNIX
     combined['timestamp_share'] = combined['timestamp_share'].apply(parse_timestamp_robust)
     combined = combined.dropna(subset=['timestamp_share']).reset_index(drop=True)
+    combined['timestamp_share'] = combined['timestamp_share'].astype('Int64')  # Nullable integer
+
     combined['object_id'] = combined['object_id'].astype(str).replace('nan', '').fillna('')
     combined = combined[combined['object_id'].str.strip() != ""].copy()
     combined = combined.drop_duplicates(subset=['account_id', 'content_id', 'object_id', 'timestamp_share']).reset_index(drop=True)
@@ -156,6 +180,7 @@ def final_preprocess_and_map_columns(df, coordination_mode="Text Content"):
     """
     Performs final preprocessing steps on the combined DataFrame.
     Respects coordination_mode: uses text or URL as object_id.
+    Ensures timestamp_share is UNIX integer.
     """
     if df.empty:
         return df
@@ -185,9 +210,6 @@ def final_preprocess_and_map_columns(df, coordination_mode="Text Content"):
         df_processed['original_text'] = df_processed['URL'].astype(str).replace('nan', '').fillna('')
 
     df_processed = df_processed[df_processed['original_text'].str.strip() != ""].reset_index(drop=True)
-
-    df_processed['timestamp_share'] = pd.to_datetime(df_processed['timestamp_share'], errors='coerce', utc=True)
-    df_processed = df_processed.dropna(subset=['timestamp_share']).reset_index(drop=True)
     df_processed['Platform'] = df_processed['URL'].apply(infer_platform_from_url)
 
     if 'Outlet' not in df_processed.columns:
@@ -330,7 +352,7 @@ def find_textual_similarities(df, threshold=0.85):
         })
     return pd.DataFrame(similar_pairs)
 
-# --- Cached Functions with data_source to prevent cache reuse ---
+# --- Cached Functions ---
 @st.cache_data(show_spinner="🔍 Computing textual similarities...")
 def cached_similarity_analysis(_df, threshold=0.85, data_source="default"):
     return find_textual_similarities(_df, threshold)
@@ -431,7 +453,7 @@ elif data_source == "Upload CSV Files":
         bytes_data = uploaded_civicsignals.getvalue()
         try:
             civicsignals_df_upload = pd.read_csv(BytesIO(bytes_data), sep=',')
-            st.sidebar.success(f"✅ CivicSignals: Loaded {len(civicsignals_df_upload)} rows")
+            st.sidebar.success(f"✅ CivicSignal: Loaded {len(civicsignals_df_upload)} rows")
         except Exception as e:
             st.error(f"❌ Failed to read CivicSignals CSV: {e}")
             st.stop()
@@ -465,7 +487,7 @@ elif data_source == "Upload CSV Files":
         st.warning("Please upload at least one CSV file to proceed.")
         st.stop()
 
-# Debug: Show what was actually loaded
+# Debug
 st.sidebar.markdown("---")
 st.sidebar.markdown(f"**Mode:** `{coordination_mode}`")
 st.sidebar.markdown(f"**Source:** `{data_source}`")
@@ -485,7 +507,6 @@ st.sidebar.markdown("### 💾 Download Combined & Preprocessed Data")
 def convert_df_to_csv(data_frame):
     return data_frame.to_csv(index=False).encode('utf-8')
 
-# Always include core columns
 download_df_columns = ['account_id', 'content_id', 'object_id', 'timestamp_share']
 downloadable_df = df[download_df_columns].copy() if all(col in df.columns for col in download_df_columns) else pd.DataFrame()
 
@@ -503,28 +524,25 @@ else:
 
 # --- Sidebar Filters ---
 st.sidebar.header("🔍 Global Filters (Apply to all tabs)")
-if not pd.api.types.is_datetime64_any_dtype(df['timestamp_share']):
-    st.error("timestamp_share column is not in datetime format.")
+if 'timestamp_share' not in df.columns or df['timestamp_share'].dtype != 'Int64':
+    st.error("timestamp_share must be an integer (UNIX timestamp).")
     st.stop()
 
-min_date = df['timestamp_share'].min().date()
-max_date = df['timestamp_share'].max().date()
+min_date = pd.to_datetime(df['timestamp_share'].min(), unit='s').date()
+max_date = pd.to_datetime(df['timestamp_share'].max(), unit='s').date()
 selected_date_range = st.sidebar.date_input("Date Range", value=[min_date, max_date], min_value=min_date, max_value=max_date)
 
 if len(selected_date_range) == 2:
-    start_dt = pd.Timestamp(selected_date_range[0], tz='UTC')
-    end_dt = pd.Timestamp(selected_date_range[1], tz='UTC') + pd.Timedelta(days=1) - pd.Timedelta(microseconds=1)
+    start_ts = int(pd.Timestamp(selected_date_range[0], tz='UTC').timestamp())
+    end_ts = int((pd.Timestamp(selected_date_range[1], tz='UTC') + timedelta(days=1) - timedelta(microseconds=1)).timestamp())
 else:
-    start_dt = pd.Timestamp(selected_date_range[0], tz='UTC')
-    end_dt = start_dt + pd.Timedelta(days=1) - pd.Timedelta(microseconds=1)
-
-available_platforms_global = df['Platform'].dropna().astype(str).unique().tolist()
-platforms_global = st.sidebar.multiselect("Platforms", options=available_platforms_global, default=available_platforms_global)
+    start_ts = int(pd.Timestamp(selected_date_range[0], tz='UTC').timestamp())
+    end_ts = start_ts + 86400 - 1
 
 filtered_df_global = df[
-    (df['timestamp_share'] >= start_dt) &
-    (df['timestamp_share'] <= end_dt) &
-    (df['Platform'].isin(platforms_global))
+    (df['timestamp_share'] >= start_ts) &
+    (df['timestamp_share'] <= end_ts) &
+    (df['Platform'].isin(df['Platform'].dropna().unique()))
 ].copy()
 
 if filtered_df_global.empty:
@@ -581,7 +599,8 @@ with tab1:
                 fig_ht = px.bar(hashtag_counts, title="Top 10 Hashtags (Social Media Only)", labels={'value': 'Frequency', 'index': 'Hashtag'})
                 st.plotly_chart(fig_ht, use_container_width=True)
 
-        time_series = filtered_df_global.set_index('timestamp_share').resample('D').size()
+        time_series = filtered_df_global.set_index('timestamp_share').resample('D', origin='epoch').size()
+        time_series.index = pd.to_datetime(time_series.index, unit='s', utc=True)
         fig_ts = px.area(time_series, title="Daily Post Volume", labels={'value': 'Number of Posts', 'timestamp_share': 'Date'})
         st.plotly_chart(fig_ts, use_container_width=True)
 
@@ -595,7 +614,7 @@ with tab2:
         platforms_analysis = st.multiselect(
             "Platforms to include in Similarity Analysis:",
             options=filtered_df_global['Platform'].dropna().astype(str).unique().tolist(),
-            default=available_platforms_global,
+            default=filtered_df_global['Platform'].dropna().astype(str).unique().tolist(),
             key="platforms_analysis_tab2"
         )
         analysis_df_filtered_by_platform = filtered_df_global[filtered_df_global['Platform'].isin(platforms_analysis)].copy()
@@ -641,7 +660,6 @@ with tab2:
                 narrative_summary = narrative_summary.sort_values(by='share_count', ascending=False).reset_index(drop=True)
 
                 st.markdown("### 🔝 Top Coordinated Narratives")
-                st.write("Each row represents a unique narrative snippet shared across multiple posts. Coordination type helps distinguish between syndicated content and potential CIB activity.")
                 fig_nar = px.bar(
                     narrative_summary.head(10),
                     x='share_count',
@@ -665,7 +683,7 @@ with tab2:
                     use_container_width=True
                 )
 
-                st.markdown("### 🔄 Full Similarity Pairs")
+                st.markdown("### 🔄 Full Similarity Pairs (Original Posts Only)")
                 st.write("This table lists all detected pairs of similar texts between *original posts*, with coordination type classification.")
                 display_sim_df = sim_df[[
                     'coordination_type', 'similarity',
@@ -688,7 +706,7 @@ with tab2:
         else:
             st.info("No valid text data for similarity analysis.")
 
-    else:  # Shared URLs mode
+    else:
         st.subheader("🔗 Coordination by Shared URLs")
         url_df = filtered_df_global[
             (filtered_df_global['URL'].notna()) &
