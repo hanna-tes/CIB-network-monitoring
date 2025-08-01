@@ -140,11 +140,15 @@ def preprocess_data(df):
     if df.empty:
         return df
 
-    # --- CLEAN COLUMN NAMES ---
+    # --- CLEAN COLUMN NAMES: Strip and normalize ---
     df.columns = [str(col).strip() for col in df.columns]
     df = df.drop_duplicates().reset_index(drop=True)
 
-    # --- EARLY COLUMN MAPPING (Normalized) ---
+    # --- NORMALIZE FUNCTION ---
+    def norm(s):
+        return re.sub(r'\W+', '', str(s).lower())
+
+    # --- COLUMN MAPPING (Normalized) ---
     col_map = {
         'Hit Sentence': 'text', 'Headline': 'text', 'opening text': 'text',
         'Opening Text': 'text', 'message': 'text', 'content': 'text',
@@ -161,16 +165,12 @@ def preprocess_data(df):
         'publish_date': 'Timestamp', 'timestamp_share': 'Timestamp', 'Time': 'Timestamp',
     }
 
+    # Apply mapping using normalized keys
     new_columns = []
     for col in df.columns:
-        if col in col_map:
-            new_columns.append(col_map[col])
-            continue
-        normalized_col = col.lower().replace(" ", "").replace("_", "").replace("-", "")
         matched = None
         for key, target in col_map.items():
-            norm_key = key.lower().replace(" ", "").replace("_", "").replace("-", "")
-            if normalized_col == norm_key:
+            if norm(col) == norm(key):
                 matched = target
                 break
         new_columns.append(matched if matched else col)
@@ -184,15 +184,18 @@ def preprocess_data(df):
     if missing_cols:
         st.error(f"❌ Missing required columns after mapping: {missing_cols}")
 
+        # Debug: Show available columns
+        st.write("🔍 Available columns:", [f"`{c}`" for c in df.columns])
+
         suggestions = {
-            'Influencer': ['influencer', 'author', 'username', 'user', 'creator', 'media_name'],
+            'Influencer': ['influencer', 'author', 'username', 'user', 'media_name'],
             'text': ['hit sentence', 'opening text', 'headline', 'message', 'content', 'title']
         }
 
         for col in missing_cols:
             close_matches = [
                 c for c in df.columns
-                if any(sugg in c.lower().replace(" ", "") for sugg in suggestions.get(col, []))
+                if any(sugg in norm(c) for sugg in suggestions.get(col, []))
             ]
             if close_matches:
                 st.info(f"💡 Did you mean to map `{close_matches[0]}` → `{col}`?")
@@ -209,7 +212,7 @@ def preprocess_data(df):
                 st.error(f"🛑 Still missing: '{col}' → Cannot continue.")
                 st.stop()
 
-    # --- Ensure 'text' is string and clean ---
+    # --- Clean 'text' column ---
     df['text'] = df['text'].astype(str)
     df = df[df['text'].notna()]
     df = df[df['text'].str.strip() != ""]
@@ -309,7 +312,6 @@ def find_textual_similarities(df, threshold=0.85):
     Only analyzes ORIGINAL posts for narrative creation.
     Amplification (RT/QT/Repost) is tracked separately.
     """
-    # Filter to only original posts
     original_df = df[df['post_type'] == 'Original'].copy()
 
     if len(original_df) < 2:
@@ -568,20 +570,11 @@ with tab2:
             return matches.sum()
 
         narrative_summary = sim_df.groupby('shared_narrative').agg(
-        share_count=('similarity', 'count'),
-        influencers_involved=('influencer1', lambda x: ", ".join(x.astype(str).unique()[:5]) + ("..." if len(x.unique()) > 5 else "")),
-        platforms_involved=('platforms_involved', lambda x: ", ".join(
-            sorted(
-                list(
-                    set(
-                        p.strip()
-                        for sublist in x.tolist()
-                        for p in sublist.split(',') if p.strip() != ""
-                    )
-                )
-            )
-        ))
-      ).sort_values(by='share_count', ascending=False).reset_index()
+            share_count=('similarity', 'count'),
+            influencers_involved=('influencer1', lambda x: ", ".join(x.astype(str).unique()[:5]) + ("..." if len(x.unique()) > 5 else "")),
+            platforms_involved=('platforms_involved', lambda x: ", ".join(sorted(list(set([p.strip() for sublist in x.tolist() for p in sublist.split(',') if p.strip() != ""])))),
+            repost_count=('shared_narrative', lambda x: get_repost_count(x.iloc[0]))
+        ).sort_values(by='share_count', ascending=False).reset_index()
 
         st.markdown("### 🔝 Top Coordinated Narratives")
         fig_nar = px.bar(
