@@ -568,11 +568,20 @@ with tab2:
             return matches.sum()
 
         narrative_summary = sim_df.groupby('shared_narrative').agg(
-            share_count=('similarity', 'count'),
-            influencers_involved=('influencer1', lambda x: ", ".join(x.astype(str).unique()[:5]) + ("..." if len(x.unique()) > 5 else "")),
-            platforms_involved=('platforms_involved', lambda x: ", ".join(sorted(list(set([p.strip() for sublist in x.tolist() for p in sublist.split(',') if p.strip() != ""])))),
-            repost_count=('shared_narrative', lambda x: get_repost_count(x.iloc[0]))
-        ).sort_values(by='share_count', ascending=False).reset_index()
+        share_count=('similarity', 'count'),
+        influencers_involved=('influencer1', lambda x: ", ".join(x.astype(str).unique()[:5]) + ("..." if len(x.unique()) > 5 else "")),
+        platforms_involved=('platforms_involved', lambda x: ", ".join(
+            sorted(
+                list(
+                    set(
+                        p.strip()
+                        for sublist in x.tolist()
+                        for p in sublist.split(',') if p.strip() != ""
+                    )
+                )
+            )
+        ))
+      ).sort_values(by='share_count', ascending=False).reset_index()
 
         st.markdown("### 🔝 Top Coordinated Narratives")
         fig_nar = px.bar(
