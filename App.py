@@ -44,16 +44,32 @@ def extract_original_text(text):
     cleaned = re.sub(r'^(RT|rt)\s+@\w+:\s*', '', text, flags=re.IGNORECASE).strip()
     return cleaned
 
-@st.cache_data(show_spinner="📥 Loading default dataset...")
-def load_default_dataset():
-    url = "https://raw.githubusercontent.com/hanna-tes/CIB-network-monitoring/refs/heads/main/TogoJULYData%20-%20Sheet1.csv"
-    try:
-        df = pd.read_csv(url)
-        st.sidebar.success("✅ Default data loaded")
-        return df
-    except Exception as e:
-        st.error(f"Failed to load default dataset: {e}")
-        return pd.DataFrame()
+@st.cache_data(show_spinner="📥 Loading default datasets...")
+def load_default_datasets():
+    base_url = "https://raw.githubusercontent.com/hanna-tes/CIB-network-monitoring/refs/heads/main/"
+    urls = {
+        "meltwater": f"{base_url}TogoJULYData%20-%20Sheet1.csv",
+        "civicsignals": f"{base_url}togo-or-lome-or-togo-all-story-urls-20250707142808.csv"
+    }
+
+    meltwater_df = pd.DataFrame()
+    civicsignals_df = pd.DataFrame()
+
+    for key, url in urls.items():
+        try:
+            df = pd.read_csv(url, sep=',')
+            if not df.empty:
+                if key == "meltwater":
+                    meltwater_df = df
+                elif key == "civicsignals":
+                    civicsignals_df = df
+                st.sidebar.success(f"✅ {key.capitalize()}: Data loaded from default URL")
+            else:
+                st.sidebar.warning(f"⚠️ {key.capitalize()}: Loaded but file is empty.")
+        except Exception as e:
+            st.sidebar.warning(f"⚠️ Failed to load {key}: {e}")
+
+    return meltwater_df, civicsignals_df
 
 # --- Combine Multiple Datasets ---
 def combine_social_media_data(
@@ -460,14 +476,14 @@ with tab1:
     top_influencers = filtered_df['Influencer'].value_counts().head(10)
     fig_src = px.bar(top_influencers, title="Top 10 Influencers", labels={'value': 'Posts', 'index': 'Influencer'})
     st.plotly_chart(fig_src, use_container_width=True)
-    st.markdown("**Top 10 Influencers**: Shows the most active accounts based on post volume.")
+    st.markdown("**Top 10 Influencers**: Shows the most active accounts based on number of posts.")
 
     # Top 10 Outlets
     if 'Outlet' in filtered_df.columns:
         top_outlets = filtered_df['Outlet'].value_counts().head(10)
         fig_out = px.bar(top_outlets, title="Top 10 Outlets", labels={'value': 'Articles', 'index': 'Outlet'})
         st.plotly_chart(fig_out, use_container_width=True)
-        st.markdown("**Top 10 Outlets**: Ranks media sources by number of published articles.")
+        st.markdown("**Top 10 Outlets**: Ranks media outlets by number of published articles.")
 
     # Top 10 Channels
     if 'Channel' in filtered_df.columns:
@@ -483,7 +499,7 @@ with tab1:
             hashtag_counts = pd.Series(all_hashtags).value_counts().head(10)
             fig_ht = px.bar(hashtag_counts, title="Top 10 Hashtags", labels={'value': 'Frequency', 'index': 'Hashtag'})
             st.plotly_chart(fig_ht, use_container_width=True)
-            st.markdown("**Top 10 Hashtags**: Highlights the most frequently used hashtags in the dataset.")
+            st.markdown("**Top 10 Hashtags**: Highlights the most frequently used hashtags across posts.")
         else:
             st.info("No valid hashtags found in the data.")
 
