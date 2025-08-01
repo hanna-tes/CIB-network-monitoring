@@ -36,7 +36,6 @@ def infer_platform_from_url(url):
         return "Media"
     else:
         return "Unknown"
-
 def extract_original_text(text):
     """Remove RT @user: prefix to get the core message"""
     if pd.isna(text) or not isinstance(text, str):
@@ -149,7 +148,9 @@ def preprocess_data(df):
         return df
 
     df = df.drop_duplicates().reset_index(drop=True)
-
+    # --- CLEAN COLUMN NAMES FIRST ---
+    df.columns = [str(col).strip() for col in df.columns]  # Remove leading/trailing spaces
+    df = df.loc[:, ~df.columns.duplicated()]  # Remove duplicate columns
     # --- EARLY COLUMN MAPPING (Normalized) ---
     col_map = {
         # 💬 Text Content
