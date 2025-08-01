@@ -604,24 +604,38 @@ with tab1:
                 st.plotly_chart(fig_ht, use_container_width=True)
                 st.markdown("**Top 10 Hashtags (Social Media Only)**: Highlights the most frequently used hashtags on social platforms.")
 
-        # Convert UNIX timestamp to datetime for plotting
+        # ✅ Fixed: Safe UNIX timestamp conversion for plotting
         plot_df = filtered_df_global.copy()
-        plot_df['datetime'] = pd.to_datetime(plot_df['timestamp_share'], unit='s', utc=True)
-        plot_df = plot_df.set_index('datetime')
-        
-        # Resample by day
-        time_series = plot_df.resample('D').size()
-        
-        fig_ts = px.area(
-            time_series,
-            title="Daily Post Volume",
-            labels={'value': 'Number of Posts', 'datetime': 'Date'},
-            markers=True
-        )
-        fig_ts.update_layout(xaxis_title="Date", yaxis_title="Number of Posts")
-        st.plotly_chart(fig_ts, use_container_width=True)
-        st.markdown("**Daily Post Volume**: Visualizes the volume of posts over time to identify spikes or trends.")
 
+        if 'timestamp_share' not in plot_df.columns:
+            st.warning("⚠️ 'timestamp_share' column not found. Cannot plot time series.")
+        else:
+            # Convert to numeric (in case it's string)
+            plot_df['timestamp_share'] = pd.to_numeric(plot_df['timestamp_share'], errors='coerce')
+            # Keep only valid UNIX timestamps (roughly between 2000–2100)
+            valid_mask = (plot_df['timestamp_share'] >= 946684800) & (plot_df['timestamp_share'] <= 4102444800)
+            plot_df = plot_df[valid_mask]
+            if plot_df.empty:
+                st.info("No valid timestamps available for time series.")
+            else:
+                # Convert to datetime
+                plot_df['datetime'] = pd.to_datetime(plot_df['timestamp_share'], unit='s', utc=True)
+                plot_df = plot_df.set_index('datetime')
+                time_series = plot_df.resample('D').size()
+
+                if time_series.empty:
+                    st.info("No data to display in time series.")
+                else:
+                    fig_ts = px.area(
+                        time_series,
+                        title="Daily Post Volume",
+                        labels={'value': 'Number of Posts', 'datetime': 'Date'},
+                        markers=True
+                    )
+                    fig_ts.update_layout(xaxis_title="Date", yaxis_title="Number of Posts")
+                    st.plotly_chart(fig_ts, use_container_width=True)
+                    st.markdown("**Daily Post Volume**: Visualizes the volume of posts over time to identify spikes or trends.")
+                    
 # ==================== TAB 2: Similarity & Coordination ====================
 with tab2:
     st.subheader("🧠 Narrative Detection & Coordination")
