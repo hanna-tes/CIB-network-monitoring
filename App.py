@@ -661,14 +661,14 @@ with tab2:
             filtered_df_global['Platform'].isin(platforms_analysis)
         ].copy()
 
-        # 🔥 CRITICAL: Keep only original tweets (no RT, QT, repost)
+        # 🔥 Keep only original tweets (no RT, QT, repost)
         original_df = analysis_df_filtered_by_platform[
             ~analysis_df_filtered_by_platform['object_id'].astype(str).str.startswith('RT @') &
             ~analysis_df_filtered_by_platform['object_id'].astype(str).str.startswith('qt @') &
             ~analysis_df_filtered_by_platform['object_id'].astype(str).str.contains('repost', case=False, na=False)
         ].copy()
 
-        # Ensure we have original_text
+        # Ensure original_text is available
         if 'original_text' not in original_df.columns:
             original_df['original_text'] = original_df['object_id'].astype(str)
 
@@ -701,8 +701,7 @@ with tab2:
                     matches = repost_df['object_id'].astype(str).str.contains(pattern, case=False, na=False)
                     return matches.sum()
 
-                # ✅ Fix: Use 'account_id1' and 'account_id2' — not 'influencer1'
-                # Also handle platforms_involved safely
+                # Aggregate narratives
                 try:
                     narrative_summary = sim_df.groupby('shared_narrative').agg(
                         share_count=('similarity', 'count'),
@@ -710,9 +709,7 @@ with tab2:
                         platforms_involved=('platform1', lambda x: ", ".join(
                             sorted(
                                 list(
-                                    set(
-                                        p.strip() for p in x.astype(str).tolist() if p.strip() != ""
-                                    )
+                                    set(p.strip() for p in x.astype(str).tolist() if p.strip() != "")
                                 )
                             )
                         )),
@@ -737,18 +734,45 @@ with tab2:
                     st.dataframe(narrative_summary)
                     st.markdown("### 🔄 Full Similarity Pairs")
                     st.caption("Only shows similarity between original posts (no RTs, QTs, or reposts). Use links to verify context.")
+
+                    # Prepare display DataFrame
                     display_sim_df = sim_df[[
                         'text1', 'account_id1', 'platform1', 'timestamp_share1', 'url1',
                         'text2', 'account_id2', 'platform2', 'timestamp_share2', 'url2',
                         'similarity'
                     ]].copy()
-                    display_sim_df['url1'] = display_sim_df['url1'].apply(
-                        lambda x: f'<a href="{x}" target="_blank">{x}</a>' if pd.notna(x) and x.strip() != "" else ""
+
+                    # Rename for clarity
+                    display_sim_df = display_sim_df.rename(columns={
+                        'account_id1': 'Influencer 1',
+                        'account_id2': 'Influencer 2',
+                        'platform1': 'Platform 1',
+                        'platform2': 'Platform 2',
+                        'timestamp_share1': 'Time 1',
+                        'timestamp_share2': 'Time 2',
+                        'url1': 'URL 1',
+                        'url2': 'URL 2',
+                        'similarity': 'Similarity'
+                    })
+
+                    # Format timestamps
+                    for col in ['Time 1', 'Time 2']:
+                        if col in display_sim_df.columns:
+                            display_sim_df[col] = pd.to_datetime(
+                                display_sim_df[col], unit='s', utc=True, errors='coerce'
+                            ).dt.strftime('%Y-%m-%d %H:%M')
+
+                    # Use st.data_editor with LinkColumn
+                    st.data_editor(
+                        display_sim_df,
+                        column_config={
+                            "URL 1": st.column_config.LinkColumn("URL 1"),
+                            "URL 2": st.column_config.LinkColumn("URL 2")
+                        },
+                        hide_index=True,
+                        use_container_width=True
                     )
-                    display_sim_df['url2'] = display_sim_df['url2'].apply(
-                        lambda x: f'<a href="{x}" target="_blank">{x}</a>' if pd.notna(x) and x.strip() != "" else ""
-                    )
-                    st.markdown(display_sim_df.to_html(escape=False), unsafe_allow_html=True)
+                    st.markdown("**Full Similarity Pairs**: Shows all pairs of posts with highly similar content, including source and timestamps.")
                 except Exception as e:
                     st.error(f"❌ Failed to generate narrative summary: {e}")
                     st.write("Debug: Check column names in `sim_df`:")
