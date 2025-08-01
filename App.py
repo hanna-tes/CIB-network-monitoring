@@ -695,7 +695,7 @@ with tab2:
                     use_container_width=True
                 )
 
-                st.markdown("### 🔄 Full Similarity Pairs (Original Posts Only)")
+                st.markdown("### 🔄 Full Similarity Pairs")
                 st.write("This table lists all detected pairs of similar texts between *original posts*, with coordination type classification.")
                 display_sim_df = sim_df[[
                     'coordination_type', 'similarity',
