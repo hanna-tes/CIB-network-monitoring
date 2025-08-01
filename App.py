@@ -640,7 +640,7 @@ with tab1:
 with tab2:
     st.subheader("🧠 Narrative Detection & Coordination")
     st.markdown(f"**Current Mode:** Analyzing coordination by **{coordination_mode}**")
-    st.markdown("-")
+    st.markdown("---")
 
     if coordination_mode == "Text Content":
         platforms_analysis = st.multiselect(
@@ -657,16 +657,18 @@ with tab2:
         )
 
         # Filter by platform
-        analysis_df_filtered_by_platform = filtered_df_global[filtered_df_global['Platform'].isin(platforms_analysis)].copy()
+        analysis_df_filtered_by_platform = filtered_df_global[
+            filtered_df_global['Platform'].isin(platforms_analysis)
+        ].copy()
 
-        # 🔥 CRITICAL: Keep only original tweets (no RT, QT, or reposts)
+        # 🔥 CRITICAL: Keep only original tweets (no RT, QT, repost)
         original_df = analysis_df_filtered_by_platform[
             ~analysis_df_filtered_by_platform['object_id'].astype(str).str.startswith('RT @') &
             ~analysis_df_filtered_by_platform['object_id'].astype(str).str.startswith('qt @') &
             ~analysis_df_filtered_by_platform['object_id'].astype(str).str.contains('repost', case=False, na=False)
         ].copy()
 
-        # Use 'object_id' as text if 'original_text' is not available
+        # Ensure we have original_text
         if 'original_text' not in original_df.columns:
             original_df['original_text'] = original_df['object_id'].astype(str)
 
@@ -699,38 +701,58 @@ with tab2:
                     matches = repost_df['object_id'].astype(str).str.contains(pattern, case=False, na=False)
                     return matches.sum()
 
-                # Aggregate narratives
-                narrative_summary = sim_df.groupby('shared_narrative').agg(
-                    share_count=('similarity', 'count'),
-                    influencers_involved=('influencer1', lambda x: ", ".join(x.astype(str).unique()[:5]) + ("..." if len(x.unique()) > 5 else "")),
-                    platforms_involved=('platforms_involved', lambda x: ", ".join(
-                        sorted(list(set([p.strip() for sublist in x.tolist() for p in sublist.split(',') if p.strip() != ""])))
-                    )),
-                    repost_count=('shared_narrative', lambda x: get_repost_count(x.iloc[0]))
-                ).sort_values(by='share_count', ascending=False).reset_index()
+                # ✅ Fix: Use 'account_id1' and 'account_id2' — not 'influencer1'
+                # Also handle platforms_involved safely
+                try:
+                    narrative_summary = sim_df.groupby('shared_narrative').agg(
+                        share_count=('similarity', 'count'),
+                        influencers_involved=('account_id1', lambda x: ", ".join(x.astype(str).unique()[:5]) + ("..." if len(x.unique()) > 5 else "")),
+                        platforms_involved=('platform1', lambda x: ", ".join(
+                            sorted(
+                                list(
+                                    set(
+                                        p.strip() for p in x.astype(str).tolist() if p.strip() != ""
+                                    )
+                                )
+                            )
+                        )),
+                        repost_count=('shared_narrative', lambda x: get_repost_count(x.iloc[0]))
+                    ).sort_values(by='share_count', ascending=False).reset_index()
 
-                st.markdown("### 🔝 Top Coordinated Narratives")
-                fig_nar = px.bar(
-                    narrative_summary.head(10),
-                    x='share_count',
-                    y='shared_narrative',
-                    orientation='h',
-                    title="Top 10 Most Shared Narratives",
-                    labels={'shared_narrative': 'Narrative Snippet', 'share_count': 'Copy-Paste Count'},
-                    color='repost_count',
-                    color_continuous_scale='Blues',
-                    hover_data=['repost_count']
-                )
-                st.plotly_chart(fig_nar, use_container_width=True)
-                st.markdown("**Top Coordinated Narratives**: Based on original posts. Bar color shows how many times the narrative was amplified via reposts.")
+                    st.markdown("### 🔝 Top Coordinated Narratives")
+                    fig_nar = px.bar(
+                        narrative_summary.head(10),
+                        x='share_count',
+                        y='shared_narrative',
+                        orientation='h',
+                        title="Top 10 Most Shared Narratives",
+                        labels={'shared_narrative': 'Narrative Snippet', 'share_count': 'Copy-Paste Count'},
+                        color='repost_count',
+                        color_continuous_scale='Blues',
+                        hover_data=['repost_count']
+                    )
+                    st.plotly_chart(fig_nar, use_container_width=True)
+                    st.markdown("**Top Coordinated Narratives**: Based on original posts. Bar color shows how many times the narrative was amplified via reposts.")
 
-                st.dataframe(narrative_summary)
-                st.markdown("### 🔄 Full Similarity Pairs")
-                st.caption("Only shows similarity between original posts (no RTs, QTs, or reposts). Use links to verify context.")
-                display_sim_df = sim_df[['text1', 'influencer1', 'platform1', 'time1', 'url1', 'text2', 'influencer2', 'platform2', 'time2', 'url2', 'similarity']].copy()
-                display_sim_df['url1'] = display_sim_df['url1'].apply(lambda x: f'<a href="{x}" target="_blank">{x}</a>' if pd.notna(x) and x.strip() != "" else "")
-                display_sim_df['url2'] = display_sim_df['url2'].apply(lambda x: f'<a href="{x}" target="_blank">{x}</a>' if pd.notna(x) and x.strip() != "" else "")
-                st.markdown(display_sim_df.to_html(escape=False), unsafe_allow_html=True)
+                    st.dataframe(narrative_summary)
+                    st.markdown("### 🔄 Full Similarity Pairs")
+                    st.caption("Only shows similarity between original posts (no RTs, QTs, or reposts). Use links to verify context.")
+                    display_sim_df = sim_df[[
+                        'text1', 'account_id1', 'platform1', 'timestamp_share1', 'url1',
+                        'text2', 'account_id2', 'platform2', 'timestamp_share2', 'url2',
+                        'similarity'
+                    ]].copy()
+                    display_sim_df['url1'] = display_sim_df['url1'].apply(
+                        lambda x: f'<a href="{x}" target="_blank">{x}</a>' if pd.notna(x) and x.strip() != "" else ""
+                    )
+                    display_sim_df['url2'] = display_sim_df['url2'].apply(
+                        lambda x: f'<a href="{x}" target="_blank">{x}</a>' if pd.notna(x) and x.strip() != "" else ""
+                    )
+                    st.markdown(display_sim_df.to_html(escape=False), unsafe_allow_html=True)
+                except Exception as e:
+                    st.error(f"❌ Failed to generate narrative summary: {e}")
+                    st.write("Debug: Check column names in `sim_df`:")
+                    st.write(list(sim_df.columns))
             else:
                 st.info("No significant similarities found above threshold between original posts.")
     else:
@@ -761,7 +783,7 @@ with tab2:
                 st.info("No URLs shared by multiple influencers.")
         else:
             st.info("No valid URLs to analyze.")
-
+            
 # ==================== TAB 3: Network & Risk ====================
 with tab3:
     st.subheader("🚨 High-Risk Accounts & Networks")
