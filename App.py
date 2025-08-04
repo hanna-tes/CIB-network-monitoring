@@ -813,36 +813,40 @@ with tab3:
     st.subheader("🚨 High-Risk Accounts & Networks")
     st.markdown("---")
 
-    # ✅ Debug: Show columns
-    #st.write("🔍 **Available columns:**", list(filtered_df_global.columns))
+    # ✅ Debug: Show what we're working with
+    #st.write("🔍 **Available columns in filtered_df_global:**", list(filtered_df_global.columns))
 
     risk_df = filtered_df_global.copy()
 
     # 🔁 Force 'text' column from possible sources
-    text_cols = ['Hit Sentence', 'title', 'message', 'content', 'object_id', 'Body']
-    for col in text_cols:
+    possible_text_columns = ['Hit Sentence', 'title', 'message', 'content', 'object_id', 'Body', 'FullText', 'opening text']
+    found = False
+    for col in possible_text_columns:
         if col in risk_df.columns:
-            risk_df['text'] = risk_df[col].astype(str).replace('nan', '').str.strip()
-            st.info(f"✅ Using '{col}' as 'text'")
+            risk_df['text'] = risk_df[col].astype(str).fillna('').replace('nan', '').str.strip()
+            #st.info(f"✅ Created 'text' column from `{col}`")
+            found = True
             break
-    else:
-        st.error("❌ No text column found.")
+
+    if not found:
+        st.error("❌ No possible text column found. Available: " + str(list(risk_df.columns)))
         st.stop()
 
-    # Clean
+    # Clean and filter
     risk_df = risk_df[risk_df['text'] != ""].reset_index(drop=True)
     if risk_df.empty:
         st.error("❌ No valid text after cleaning.")
         st.stop()
 
-    # 🔁 Convert timestamp
+    # 🔁 Convert UNIX timestamp to UTC datetime
     if 'timestamp_share' in risk_df.columns:
         risk_df['Timestamp'] = pd.to_datetime(risk_df['timestamp_share'], unit='s', utc=True, errors='coerce')
         risk_df = risk_df.dropna(subset=['Timestamp']).reset_index(drop=True)
     else:
-        st.warning("⚠️ Using current time for Timestamp.")
+        st.warning("⚠️ 'timestamp_share' not found. Using current time.")
         risk_df['Timestamp'] = pd.Timestamp.now(tz='UTC')
 
+    # Ensure 'original_text' exists
     if 'original_text' not in risk_df.columns:
         risk_df['original_text'] = risk_df['text'].apply(extract_original_text)
 
@@ -850,7 +854,10 @@ with tab3:
     # 🤖 Detected Coordination Clusters
     # ----------------------------
     st.markdown("### 🤖 Detected Coordination Clusters")
-    st.markdown("**Detected Coordination Clusters**: Groups posts into clusters based on content similarity, revealing coordinated campaigns.")
+    st.markdown("""
+        **Detected Coordination Clusters**: Groups posts into clusters based on content similarity, revealing coordinated campaigns. 
+        Each cluster may represent a distinct narrative or disinformation effort.
+    """)
     try:
         clustered_df = cached_clustering(risk_df)
         if 'cluster' not in clustered_df.columns:
@@ -858,14 +865,14 @@ with tab3:
 
         cluster_counts = clustered_df['cluster'].value_counts()
         if cluster_counts.empty:
-            st.info("No clusters detected.")
+            st.info("No clusters detected (e.g., all noise or only one post).")
         else:
             fig_clust = px.bar(
                 cluster_counts,
                 title="Cluster Sizes",
                 labels={'value': 'Member Count', 'index': 'Cluster ID'},
                 color=cluster_counts.index.astype(str),
-                color_discrete_sequence=px.colors.qualitative.Set3
+                color_discrete_sequence=px.colors.qualitative.Set3  # ✅ Correct: list of colors
             )
             st.plotly_chart(fig_clust, use_container_width=True)
             st.dataframe(clustered_df[['account_id', 'text', 'Timestamp', 'cluster']])
@@ -877,12 +884,12 @@ with tab3:
         st.info("Using all data in a single cluster for network analysis.")
 
     # ----------------------------
-    # 🕸️ User Interaction Network (Limited)
+    # 🕸️ User Interaction Network (Limited & Stable)
     # ----------------------------
     st.markdown("### 🕸️ User Interaction Network")
     st.markdown("""
         **User Interaction Network**: Visualizes connections between the most active influencers who share similar content. 
-        Only the top influencers are shown to ensure performance and clarity.
+        Only the top influencers are shown to ensure performance and clarity. Use the slider to adjust the number of nodes.
     """)
 
     try:
@@ -906,7 +913,6 @@ with tab3:
         if graph_subset.empty:
             st.info("No influencers to display in the network.")
         else:
-            # Ensure original_text
             if 'original_text' not in graph_subset.columns:
                 graph_subset['original_text'] = graph_subset['text'].apply(extract_original_text)
 
@@ -916,6 +922,7 @@ with tab3:
             if G is None or len(G.nodes()) == 0:
                 st.info("No nodes to display in the network graph.")
             else:
+                # Create edge traces
                 edge_trace = []
                 for edge in G.edges():
                     x0, y0 = pos[edge[0]]
@@ -925,7 +932,16 @@ with tab3:
                         mode='lines', line=dict(width=0.8, color='#888'), hoverinfo='none'
                     ))
 
-                node_colors = [cluster_map.get(node, 0) for node in G.nodes()]
+                # Create node trace with safe colors
+                node_clusters = [cluster_map.get(node, 0) for node in G.nodes()]
+                unique_clusters = sorted(list(set(node_clusters)))
+                
+                # Cycle through Set3 colors if more clusters than colors
+                from itertools import cycle
+                color_cycle = cycle(px.colors.qualitative.Set3)
+                color_map = {cluster: next(color_cycle) for cluster in unique_clusters}
+                node_colors = [color_map[cluster] for cluster in node_clusters]
+
                 node_trace = go.Scatter(
                     x=[pos[node][0] for node in G.nodes()],
                     y=[pos[node][1] for node in G.nodes()],
@@ -934,9 +950,7 @@ with tab3:
                     textposition="top center",
                     marker=dict(
                         size=12,
-                        color=node_colors,
-                        colorscale='Set3',
-                        colorbar=dict(title="Clusters"),
+                        color=node_colors,  # ✅ List of hex colors
                         line=dict(width=2, color='darkblue')
                     ),
                     hoverinfo='text'
@@ -963,7 +977,10 @@ with tab3:
     # ⚠️ High-Risk Influencers
     # ----------------------------
     st.markdown("### ⚠️ High-Risk Influencers")
-    st.markdown("**High-Risk Influencers**: Highlights accounts involved in 3 or more coordinated messages, indicating potential amplification roles.")
+    st.markdown("""
+        **High-Risk Influencers**: Highlights accounts involved in 3 or more coordinated messages, indicating potential amplification roles. 
+        These influencers may be central to spreading specific narratives across platforms.
+    """)
     try:
         if 'sim_df' in locals() and not sim_df.empty:
             all_influencers = pd.concat([
