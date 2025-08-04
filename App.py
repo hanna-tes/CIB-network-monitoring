@@ -818,26 +818,27 @@ with tab3:
 
     # 🔁 Convert UNIX timestamp to UTC datetime for analysis
     if 'timestamp_share' in risk_df.columns:
-        # Convert to datetime (UTC)
         risk_df['Timestamp'] = pd.to_datetime(risk_df['timestamp_share'], unit='s', utc=True, errors='coerce')
-        # Drop rows with invalid timestamps
         risk_df = risk_df.dropna(subset=['Timestamp']).reset_index(drop=True)
     else:
         st.error("❌ 'timestamp_share' column missing. Cannot create Timestamp.")
         st.stop()
 
-    # Ensure 'text' exists
     if 'text' not in risk_df.columns:
         st.error("❌ 'text' column missing. Required for clustering.")
         st.stop()
 
-    # Ensure 'original_text' exists
     if 'original_text' not in risk_df.columns:
         risk_df['original_text'] = risk_df['text'].apply(extract_original_text)
 
     # ----------------------------
     # 🤖 Detected Coordination Clusters
     # ----------------------------
+    st.markdown("### 🤖 Detected Coordination Clusters")
+    st.markdown("""
+        **Detected Coordination Clusters**: Groups posts into clusters based on content similarity, revealing coordinated campaigns. 
+        Each cluster may represent a distinct narrative or disinformation effort.
+    """)
     try:
         clustered_df = cached_clustering(risk_df)
         if 'cluster' not in clustered_df.columns:
@@ -847,7 +848,6 @@ with tab3:
         if cluster_counts.empty:
             st.info("No clusters detected (e.g., all noise or only one post).")
         else:
-            st.markdown("### 🤖 Detected Coordination Clusters")
             fig_clust = px.bar(
                 cluster_counts,
                 title="Cluster Sizes",
@@ -856,7 +856,6 @@ with tab3:
                 color_discrete_sequence=px.colors.qualitative.Set3
             )
             st.plotly_chart(fig_clust, use_container_width=True)
-            st.markdown("**Detected Coordination Clusters**: Groups posts into clusters based on content similarity, revealing coordinated campaigns.")
             st.dataframe(clustered_df[['account_id', 'text', 'Timestamp', 'cluster']])
     except Exception as e:
         st.warning(f"⚠️ Clustering failed: {e}")
@@ -867,11 +866,12 @@ with tab3:
     # 🕸️ User Interaction Network
     # ----------------------------
     st.markdown("### 🕸️ User Interaction Network")
+    st.markdown("""
+        **User Interaction Network**: Visualizes connections between influencers who share similar content, highlighting central figures and potential coordination hubs. 
+        Click and drag to explore. Node color indicates cluster membership.
+    """)
     try:
-        # Use clustered_df if available, else fall back to risk_df
         graph_input_df = clustered_df if 'clustered_df' in locals() and not clustered_df.empty else risk_df
-
-        # Ensure original_text exists
         if 'original_text' not in graph_input_df.columns:
             graph_input_df['original_text'] = graph_input_df['text'].apply(extract_original_text)
 
@@ -884,12 +884,7 @@ with tab3:
             for edge in G.edges():
                 x0, y0 = pos[edge[0]]
                 x1, y1 = pos[edge[1]]
-                edge_trace.append(go.Scatter(
-                    x=[x0, x1], y=[y0, y1],
-                    mode='lines', line=dict(width=0.8, color='#888'), hoverinfo='none'
-                ))
-
-            node_colors = [cluster_map.get(node, 0) for node in G.nodes()]
+                edge_trace.append(go.Scatter(x=[x0, x1], y=[y0, y1], mode='lines', line=dict(width=0.8, color='#888'), hoverinfo='none'))
             node_trace = go.Scatter(
                 x=[pos[node][0] for node in G.nodes()],
                 y=[pos[node][1] for node in G.nodes()],
@@ -898,28 +893,23 @@ with tab3:
                 textposition="top center",
                 marker=dict(
                     size=12,
-                    color=node_colors,
+                    color=[cluster_map.get(node, 0) for node in G.nodes()],
                     colorscale='Set3',
                     colorbar=dict(title="Clusters"),
                     line=dict(width=2, color='darkblue')
                 ),
                 hoverinfo='text'
             )
-
-            fig_net = go.Figure(
-                data=edge_trace + [node_trace],
-                layout=go.Layout(
-                    title="User Network (Click & Drag to Explore)",
-                    showlegend=False,
-                    hovermode='closest',
-                    margin=dict(b=20, l=5, r=5, t=60),
-                    xaxis=dict(showgrid=False, zeroline=False, showticklabels=False),
-                    yaxis=dict(showgrid=False, zeroline=False, showticklabels=False),
-                    height=600
-                )
-            )
+            fig_net = go.Figure(data=edge_trace + [node_trace],
+                                layout=go.Layout(
+                                    title="User Network (Click & Drag to Explore)",
+                                    showlegend=False,
+                                    hovermode='closest',
+                                    margin=dict(b=20, l=5, r=5, t=60),
+                                    xaxis=dict(showgrid=False, zeroline=False, showticklabels=False),
+                                    yaxis=dict(showgrid=False, zeroline=False, showticklabels=False),
+                                    height=600))
             st.plotly_chart(fig_net, use_container_width=True)
-            st.markdown("**User Interaction Network**: Visualizes connections between influencers who share similar content, highlighting central figures.")
     except Exception as e:
         st.warning(f"⚠️ Network graph failed: {e}")
         st.write("Debug: Check if `account_id` and `original_text` exist:")
@@ -929,6 +919,10 @@ with tab3:
     # ⚠️ High-Risk Influencers
     # ----------------------------
     st.markdown("### ⚠️ High-Risk Influencers")
+    st.markdown("""
+        **High-Risk Influencers**: Highlights accounts involved in 3 or more coordinated messages, indicating potential amplification roles. 
+        These influencers may be central to spreading specific narratives across platforms.
+    """)
     try:
         if 'sim_df' in locals() and not sim_df.empty:
             all_influencers = pd.concat([
@@ -946,7 +940,6 @@ with tab3:
                     color_continuous_scale='Reds'
                 )
                 st.plotly_chart(fig_hr, use_container_width=True)
-                st.markdown("**High-Risk Influencers**: Highlights accounts involved in 3 or more coordinated messages, indicating potential amplification roles.")
             else:
                 st.info("No influencers found participating in 3 or more coordinated messages.")
         else:
