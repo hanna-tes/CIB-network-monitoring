@@ -183,8 +183,6 @@ def preprocess_data(df):
 
     if missing_cols:
         st.error(f"❌ Missing required columns after mapping: {missing_cols}")
-
-        # Debug: Show available columns
         st.write("🔍 Available columns:", [f"`{c}`" for c in df.columns])
 
         suggestions = {
@@ -200,13 +198,27 @@ def preprocess_data(df):
             if close_matches:
                 st.info(f"💡 Did you mean to map `{close_matches[0]}` → `{col}`?")
             else:
-                if col == "Influencer":
-                    df['Influencer'] = "Unknown_User"
-                    st.warning("⚠️ Using 'Unknown_User' for Influencer.")
-                elif col == "text":
-                    st.error("🚫 No text column found. Cannot proceed.")
+                # 🔥 Fallback: Use 'account_id' as 'Influencer'
+                if col == "Influencer" and 'account_id' in df.columns:
+                    df['Influencer'] = df['account_id'].astype(str)
+                    st.warning("✅ Using 'account_id' → 'Influencer'")
+                # 🔥 Fallback: Use 'object_id' as 'text' if not URL-heavy
+                elif col == "text" and 'object_id' in df.columns:
+                    sample = df['object_id'].dropna().astype(str).str.lower().head(20)
+                    if not sample.str.contains(r'http|www|tiktok|twitter|youtu|facebook|instagram').all():
+                        df['text'] = df['object_id'].astype(str)
+                        st.warning("✅ Using 'object_id' → 'text' (contains message content)")
+                    else:
+                        st.error("🚫 'object_id' contains only URLs. No text content found.")
+                        st.stop()
+                elif col == "Timestamp" and 'timestamp_share' in df.columns:
+                    df['Timestamp'] = pd.to_datetime(df['timestamp_share'], unit='s', utc=True, errors='coerce')
+                    st.warning("✅ Converted UNIX 'timestamp_share' → 'Timestamp'")
+                else:
+                    st.error(f"🛑 Still missing: '{col}' → Cannot continue.")
                     st.stop()
 
+        # Final validation
         for col in required_cols:
             if col not in df.columns:
                 st.error(f"🛑 Still missing: '{col}' → Cannot continue.")
@@ -454,7 +466,6 @@ elif data_source == "Upload CSV Files":
         else:
             meltwater_df = pd.DataFrame()
 
-        # CivicSignals and Open-Measure use default UTF-8
         civicsignals_df = pd.read_csv(uploaded_civicsignals) if uploaded_civicsignals else pd.DataFrame()
         if not civicsignals_df.empty:
             st.sidebar.success(f"✅ CivicSignal: Loaded {len(civicsignals_df)} rows")
@@ -561,8 +572,8 @@ with tab1:
 with tab2:
     st.subheader("🧠 Narrative Detection & Coordination")
     st.markdown("""
-        **Purpose**: Identifies coordinated narratives by detecting highly similar text across different influencers. 
-        Only original posts (not retweets or reposts) are analyzed to distinguish true coordination from amplification.
+        **Purpose**: Identifies coordinated messaging by detecting highly similar text across different influencers. 
+        Only original posts (not retweets or reposts) are analyzed to distinguish true narrative reuse from amplification.
     """)
     st.markdown("---")
 
