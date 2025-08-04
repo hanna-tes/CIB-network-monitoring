@@ -813,7 +813,7 @@ with tab3:
     st.markdown("---")
 
     # ✅ Debug: Show what we're working with
-    st.write("🔍 **Available columns in filtered_df_global:**", list(filtered_df_global.columns))
+    #st.write("🔍 **Available columns in filtered_df_global:**", list(filtered_df_global.columns))
 
     risk_df = filtered_df_global.copy()
 
@@ -823,7 +823,7 @@ with tab3:
     for col in possible_text_columns:
         if col in risk_df.columns:
             risk_df['text'] = risk_df[col].astype(str).fillna('').replace('nan', '').str.strip()
-            st.info(f"✅ Created 'text' column from `{col}`")
+            #st.info(f"✅ Created 'text' column from `{col}`")
             found = True
             break
 
