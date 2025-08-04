@@ -813,41 +813,36 @@ with tab3:
     st.subheader("🚨 High-Risk Accounts & Networks")
     st.markdown("---")
 
-    # ✅ Debug and recover 'text' column
-    st.write("🔍 **Available columns in filtered_df_global:**", list(filtered_df_global.columns))
+    # ✅ Debug: Show columns
+    #st.write("🔍 **Available columns:**", list(filtered_df_global.columns))
 
     risk_df = filtered_df_global.copy()
 
-    # 🔁 Try to recover 'text' from any known column
-    possible_text_columns = ['Hit Sentence', 'title', 'message', 'content', 'object_id', 'Body', 'FullText']
-    found = False
-    for col in possible_text_columns:
+    # 🔁 Force 'text' column from possible sources
+    text_cols = ['Hit Sentence', 'title', 'message', 'content', 'object_id', 'Body']
+    for col in text_cols:
         if col in risk_df.columns:
-            risk_df['text'] = risk_df[col].astype(str)
-            st.info(f"✅ Created 'text' column from `{col}`")
-            found = True
+            risk_df['text'] = risk_df[col].astype(str).replace('nan', '').str.strip()
+            st.info(f"✅ Using '{col}' as 'text'")
             break
-
-    if not found:
-        st.error("❌ No possible text column found. Available: " + str(list(risk_df.columns)))
+    else:
+        st.error("❌ No text column found.")
         st.stop()
 
-    # Clean text
-    risk_df['text'] = risk_df['text'].fillna('').replace('nan', '').str.strip()
+    # Clean
     risk_df = risk_df[risk_df['text'] != ""].reset_index(drop=True)
     if risk_df.empty:
         st.error("❌ No valid text after cleaning.")
         st.stop()
 
-    # Convert timestamp
+    # 🔁 Convert timestamp
     if 'timestamp_share' in risk_df.columns:
         risk_df['Timestamp'] = pd.to_datetime(risk_df['timestamp_share'], unit='s', utc=True, errors='coerce')
         risk_df = risk_df.dropna(subset=['Timestamp']).reset_index(drop=True)
     else:
-        st.warning("⚠️ 'timestamp_share' not found. Using current time.")
+        st.warning("⚠️ Using current time for Timestamp.")
         risk_df['Timestamp'] = pd.Timestamp.now(tz='UTC')
 
-    # Ensure original_text
     if 'original_text' not in risk_df.columns:
         risk_df['original_text'] = risk_df['text'].apply(extract_original_text)
 
@@ -863,7 +858,7 @@ with tab3:
 
         cluster_counts = clustered_df['cluster'].value_counts()
         if cluster_counts.empty:
-            st.info("No clusters detected (e.g., all noise or only one post).")
+            st.info("No clusters detected.")
         else:
             fig_clust = px.bar(
                 cluster_counts,
@@ -876,47 +871,93 @@ with tab3:
             st.dataframe(clustered_df[['account_id', 'text', 'Timestamp', 'cluster']])
     except Exception as e:
         st.warning(f"⚠️ Clustering failed: {e}")
+        # Fallback: assign all to one cluster
+        risk_df['cluster'] = 0
+        clustered_df = risk_df
+        st.info("Using all data in a single cluster for network analysis.")
 
     # ----------------------------
-    # 🕸️ User Interaction Network
+    # 🕸️ User Interaction Network (Limited)
     # ----------------------------
     st.markdown("### 🕸️ User Interaction Network")
-    st.markdown("**User Interaction Network**: Visualizes connections between influencers who share similar content, highlighting central figures.")
+    st.markdown("""
+        **User Interaction Network**: Visualizes connections between the most active influencers who share similar content. 
+        Only the top influencers are shown to ensure performance and clarity.
+    """)
+
     try:
+        # Use clustered_df if available, else fall back
         graph_input_df = clustered_df if 'clustered_df' in locals() and not clustered_df.empty else risk_df
-        G, pos, cluster_map = cached_network_graph(graph_input_df)
-        edge_trace = []
-        for edge in G.edges():
-            x0, y0 = pos[edge[0]]
-            x1, y1 = pos[edge[1]]
-            edge_trace.append(go.Scatter(x=[x0, x1], y=[y0, y1], mode='lines', line=dict(width=0.8, color='#888'), hoverinfo='none'))
-        node_trace = go.Scatter(
-            x=[pos[node][0] for node in G.nodes()],
-            y=[pos[node][1] for node in G.nodes()],
-            text=list(G.nodes()),
-            mode='markers+text',
-            textposition="top center",
-            marker=dict(
-                size=12,
-                color=[cluster_map.get(node, 0) for node in G.nodes()],
-                colorscale='Set3',
-                colorbar=dict(title="Clusters"),
-                line=dict(width=2, color='darkblue')
-            ),
-            hoverinfo='text'
+
+        # 🔥 Limit to top influencers
+        MAX_NODES = st.slider(
+            "Max Influencers in Network Graph (for performance)",
+            min_value=10,
+            max_value=100,
+            value=30,
+            step=10,
+            key="max_nodes_tab3"
         )
-        fig_net = go.Figure(data=edge_trace + [node_trace],
-                            layout=go.Layout(
-                                title="User Network (Click & Drag to Explore)",
-                                showlegend=False,
-                                hovermode='closest',
-                                margin=dict(b=20, l=5, r=5, t=60),
-                                xaxis=dict(showgrid=False, zeroline=False, showticklabels=False),
-                                yaxis=dict(showgrid=False, zeroline=False, showticklabels=False),
-                                height=600))
-        st.plotly_chart(fig_net, use_container_width=True)
+
+        # Get top influencers by post count
+        top_influencers = graph_input_df['account_id'].value_counts().nlargest(MAX_NODES).index.tolist()
+        graph_subset = graph_input_df[graph_input_df['account_id'].isin(top_influencers)].copy()
+
+        if graph_subset.empty:
+            st.info("No influencers to display in the network.")
+        else:
+            # Ensure original_text
+            if 'original_text' not in graph_subset.columns:
+                graph_subset['original_text'] = graph_subset['text'].apply(extract_original_text)
+
+            # Build graph
+            G, pos, cluster_map = cached_network_graph(graph_subset)
+
+            if G is None or len(G.nodes()) == 0:
+                st.info("No nodes to display in the network graph.")
+            else:
+                edge_trace = []
+                for edge in G.edges():
+                    x0, y0 = pos[edge[0]]
+                    x1, y1 = pos[edge[1]]
+                    edge_trace.append(go.Scatter(
+                        x=[x0, x1], y=[y0, y1],
+                        mode='lines', line=dict(width=0.8, color='#888'), hoverinfo='none'
+                    ))
+
+                node_colors = [cluster_map.get(node, 0) for node in G.nodes()]
+                node_trace = go.Scatter(
+                    x=[pos[node][0] for node in G.nodes()],
+                    y=[pos[node][1] for node in G.nodes()],
+                    text=list(G.nodes()),
+                    mode='markers+text',
+                    textposition="top center",
+                    marker=dict(
+                        size=12,
+                        color=node_colors,
+                        colorscale='Set3',
+                        colorbar=dict(title="Clusters"),
+                        line=dict(width=2, color='darkblue')
+                    ),
+                    hoverinfo='text'
+                )
+
+                fig_net = go.Figure(
+                    data=edge_trace + [node_trace],
+                    layout=go.Layout(
+                        title="User Network (Click & Drag to Explore)",
+                        showlegend=False,
+                        hovermode='closest',
+                        margin=dict(b=20, l=5, r=5, t=60),
+                        xaxis=dict(showgrid=False, zeroline=False, showticklabels=False),
+                        yaxis=dict(showgrid=False, zeroline=False, showticklabels=False),
+                        height=600
+                    )
+                )
+                st.plotly_chart(fig_net, use_container_width=True)
     except Exception as e:
         st.warning(f"⚠️ Network graph failed: {e}")
+        st.info("Try reducing the number of influencers in the network or check data quality.")
 
     # ----------------------------
     # ⚠️ High-Risk Influencers
