@@ -7,8 +7,10 @@ import networkx as nx
 from datetime import timedelta
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics.pairwise import cosine_similarity
+from sklearn.cluster import DBSCAN
+from itertools import combinations
 import re
-from io import StringIO, BytesIO
+from io import StringIO
 import csv
 
 # --- Set Page Config ---
@@ -17,6 +19,7 @@ st.title("🕵️ CIB Network Monitoring Dashboard")
 
 # --- Helper Functions ---
 def infer_platform_from_url(url):
+    """Infers the social media or media platform from a given URL."""
     if pd.isna(url) or not isinstance(url, str) or not url.startswith("http"):
         return "Unknown"
     url = url.lower()
@@ -25,7 +28,7 @@ def infer_platform_from_url(url):
     elif "facebook.com" in url or "fb.watch" in url:
         return "Facebook"
     elif "twitter.com" in url or "x.com" in url:
-        return "Twitter"
+        return "X"
     elif "youtube.com" in url or "youtu.be" in url:
         return "YouTube"
     elif "instagram.com" in url:
@@ -38,312 +41,218 @@ def infer_platform_from_url(url):
         return "Unknown"
 
 def extract_original_text(text):
-    """Remove RT @user: prefix to get the core message"""
+    """Removes 'RT @user:' prefix to get the core message for similarity analysis."""
     if pd.isna(text) or not isinstance(text, str):
         return ""
+    # Specifically target and remove RT @user: pattern at the beginning
     cleaned = re.sub(r'^(RT|rt)\s+@\w+:\s*', '', text, flags=re.IGNORECASE).strip()
-    cleaned = re.sub(r'^(QT|qt)\s+@\w+:\s*', '', cleaned, flags=re.IGNORECASE).strip()
     return cleaned
 
-@st.cache_data(show_spinner="📥 Loading default datasets...")
-def load_default_datasets():
-    base_url = "https://raw.githubusercontent.com/hanna-tes/CIB-network-monitoring/refs/heads/main/"
-    urls = {
-        "meltwater": f"{base_url}TogoJULYData%20-%20Sheet1.csv",
-        "civicsignals": f"{base_url}togo-or-lome-or-togo-all-story-urls-20250707142808.csv"
-    }
-
-    meltwater_df = pd.DataFrame()
-    civicsignals_df = pd.DataFrame()
-
-    for key, url in urls.items():
-        try:
-            df = pd.read_csv(url, sep=',', on_bad_lines='skip')
-            if not df.empty:
-                if key == "meltwater":
-                    meltwater_df = df
-                elif key == "civicsignals":
-                    civicsignals_df = df
-                st.sidebar.success(f"✅ {key.capitalize()}: Data loaded from default URL")
-            else:
-                st.sidebar.warning(f"⚠️ {key.capitalize()}: Loaded but file is empty.")
-        except Exception as e:
-            st.sidebar.warning(f"⚠️ Failed to load {key}: {e}")
-
-    return meltwater_df, civicsignals_df
-
-# --- Combine Multiple Datasets ---
-def combine_social_media_data(
-    meltwater_df,
-    civicsignals_df,
-    openmeasure_df=None,
-    meltwater_object_col='URL',
-    civicsignals_object_col='url',
-    openmeasure_object_col='url'
-):
-    date_formats = [
-        '%b %d, %Y @ %H:%M:%S.%f', '%d-%b-%Y %I:%M%p', '%Y-%m-%d %H:%M:%S',
-        '%d/%m/%Y %H:%M:%S', '%m/%d/%Y %H:%M:%S', '%Y-%m-%dT%H:%M:%SZ',
-        '%Y-%m-%d %H:%M:%S.%f', '%d %b %Y %H:%M:%S', '%A, %d %b %Y %H:%M:%S',
-        '%b %d, %Y %I:%M%p', '%d %b %Y %I:%M%p', '%Y-%m-%d %H:%M:%S%z',
-    ]
-
-    def parse_timestamp(timestamp):
-        for fmt in date_formats:
-            try:
-                parsed = pd.to_datetime(timestamp, format=fmt, errors='coerce')
-                if pd.notna(parsed):
-                    return parsed
-            except (ValueError, TypeError):
-                continue
-        return pd.to_datetime(timestamp, infer_datetime_format=True, errors='coerce')
-
-    mw = pd.DataFrame()
-    if meltwater_df is not None and not meltwater_df.empty:
-        mw = meltwater_df[['Influencer', 'Tweet Id', meltwater_object_col, 'Date']].copy()
-        mw.columns = ['account_id', 'content_id', 'object_id', 'timestamp_share']
-
-    cs = pd.DataFrame()
-    if civicsignals_df is not None and not civicsignals_df.empty:
-        cs = civicsignals_df[['media_name', 'stories_id', civicsignals_object_col, 'publish_date']].copy()
-        cs.columns = ['account_id', 'content_id', 'object_id', 'timestamp_share']
-
-    om = pd.DataFrame()
-    if openmeasure_df is not None and not openmeasure_df.empty:
-        om = openmeasure_df[['actor_username', 'id', openmeasure_object_col, 'created_at']].copy()
-        om.columns = ['account_id', 'content_id', 'object_id', 'timestamp_share']
-
-    combined = pd.concat([mw, cs, om], ignore_index=True)
-    if combined.empty:
-        return combined
-
-    combined = combined.dropna(subset=['account_id', 'content_id', 'object_id', 'timestamp_share'])
-    combined['timestamp_share'] = combined['timestamp_share'].apply(parse_timestamp)
-    combined = combined.dropna(subset=['timestamp_share']).reset_index(drop=True)
-    combined['timestamp_share'] = pd.to_datetime(combined['timestamp_share'], utc=True, errors='coerce')
-    combined['timestamp_share'] = combined['timestamp_share'].apply(
-        lambda dt: int(dt.timestamp()) if pd.notna(dt) else None
-    )
-    combined['content_id'] = combined['content_id'].astype(str).str.replace('"', '', regex=False)
-
-    def extract_hashtags(text):
-        return ','.join(re.findall(r'#(\w+)', str(text))) if pd.notna(text) else ""
-
-    if combined['object_id'].astype(str).str.contains('#').any():
-        combined['object_id'] = combined['object_id'].apply(extract_hashtags)
-
-    return combined.drop_duplicates(subset=['account_id', 'content_id', 'object_id', 'timestamp_share'])
+@st.cache_data(show_spinner=False)
+def load_default_dataset():
+    """Loads the default dataset from a specified CSV file or URL."""
+    file_name = "TogoJULYData - Sheet1.csv" # Ensure this file is in the same directory as the script
+    try:
+        df = pd.read_csv(file_name)
+        st.sidebar.success(f"✅ Default data loaded successfully from {file_name}.")
+        return df
+    except FileNotFoundError:
+        st.error(f"File not found: {file_name}. Please ensure the default data file is in the correct directory.")
+        return pd.DataFrame()
+    except Exception as e:
+        st.error(f"Failed to load default dataset from {file_name}: {e}")
+        return pd.DataFrame()
 
 # --- Preprocessing Function ---
-def preprocess_data(df):
-    """Preprocesses the DataFrame with robust column mapping."""
-    if df.empty:
-        return df
-
-    # --- CLEAN COLUMN NAMES ---
-    df.columns = [str(col).strip() for col in df.columns]
+def preprocess_data(df, user_text_col, user_influencer_col, user_timestamp_col, user_url_col, user_outlet_col):
+    """
+    Preprocesses the DataFrame: maps columns, creates 'text' column, cleans text,
+    parses and localizes timestamps, and infers platform.
+    Uses user-defined column names first, then falls back to predefined candidates.
+    """
+    # 1. Remove duplicates
     df = df.drop_duplicates().reset_index(drop=True)
 
-    # --- NORMALIZE FUNCTION ---
-    def norm(s):
-        return re.sub(r'\W+', '', str(s).lower())
+    # Convert all column names to a consistent format (e.g., strip spaces, store original for display)
+    df.columns = df.columns.str.strip() # Clean column names for internal processing
 
-    # --- COLUMN MAPPING (Normalized) ---
-    col_map = {
-        'Hit Sentence': 'text', 'Headline': 'text', 'opening text': 'text',
-        'Opening Text': 'text', 'message': 'text', 'content': 'text',
-        'description': 'text', 'Body': 'text', 'FullText': 'text',
-        'title': 'text', 'Title': 'text', 'caption': 'text', 'Caption': 'text',
+    # Helper to find column from candidates (case-insensitive)
+    def find_column(df_local, user_col, candidates):
+        if user_col and user_col in df_local.columns and not df_local[user_col].astype(str).str.strip().eq('').all():
+            return user_col
+        
+        # Try finding a candidate column (case-insensitive check)
+        df_columns_lower = [col.lower() for col in df_local.columns]
+        for candidate in candidates:
+            if candidate.lower() in df_columns_lower:
+                # Get the actual column name with its original casing
+                actual_col = df_local.columns[df_columns_lower.index(candidate.lower())]
+                if not df_local[actual_col].astype(str).str.strip().eq('').all():
+                    return actual_col
+        return None
 
-        'Influencer': 'Influencer', 'author': 'Influencer', 'username': 'Influencer',
-        'user': 'Influencer', 'authorMeta/name': 'Influencer', 'creator': 'Influencer',
-        'authorname': 'Influencer', 'media_name': 'Influencer', 'channeltitle': 'Influencer',
-        'source': 'Influencer', 'Source': 'Influencer',
-
-        'Date': 'Timestamp', 'Alternate Date Format': 'Timestamp', 'createTimeISO': 'Timestamp',
-        'published_date': 'Timestamp', 'pubDate': 'Timestamp', 'created_at': 'Timestamp',
-        'publish_date': 'Timestamp', 'timestamp_share': 'Timestamp', 'Time': 'Timestamp',
-    }
-
-    # Apply mapping using normalized keys
-    new_columns = []
-    for col in df.columns:
-        matched = None
-        for key, target in col_map.items():
-            if norm(col) == norm(key):
-                matched = target
-                break
-        new_columns.append(matched if matched else col)
-    df.columns = new_columns
-    df = df.loc[:, ~df.columns.duplicated()]
-
-    # --- Validate Required Columns ---
-    required_cols = ["Influencer", "text"]
-    missing_cols = [col for col in required_cols if col not in df.columns]
-
-    if missing_cols:
-        st.error(f"❌ Missing required columns after mapping: {missing_cols}")
-        st.write("🔍 Available columns:", [f"`{c}`" for c in df.columns])
-
-        suggestions = {
-            'Influencer': ['influencer', 'author', 'username', 'user', 'media_name'],
-            'text': ['hit sentence', 'opening text', 'headline', 'message', 'content', 'title']
-        }
-
-        for col in missing_cols:
-            close_matches = [
-                c for c in df.columns
-                if any(sugg in norm(c) for sugg in suggestions.get(col, []))
-            ]
-            if close_matches:
-                st.info(f"💡 Did you mean to map `{close_matches[0]}` → `{col}`?")
-            else:
-                # 🔥 Fallback: Use 'account_id' as 'Influencer'
-                if col == "Influencer" and 'account_id' in df.columns:
-                    df['Influencer'] = df['account_id'].astype(str)
-                    st.warning("✅ Using 'account_id' → 'Influencer'")
-                # 🔥 Fallback: Use 'object_id' as 'text' if not URL-heavy
-                elif col == "text" and 'object_id' in df.columns:
-                    sample = df['object_id'].dropna().astype(str).str.lower().head(20)
-                    if not sample.str.contains(r'http|www|tiktok|twitter|youtu|facebook|instagram').all():
-                        df['text'] = df['object_id'].astype(str)
-                        st.warning("✅ Using 'object_id' → 'text' (contains message content)")
-                    else:
-                        st.error("🚫 'object_id' contains only URLs. No text content found.")
-                        st.stop()
-                elif col == "Timestamp" and 'timestamp_share' in df.columns:
-                    df['Timestamp'] = pd.to_datetime(df['timestamp_share'], unit='s', utc=True, errors='coerce')
-                    st.warning("✅ Converted UNIX 'timestamp_share' → 'Timestamp'")
-                else:
-                    st.error(f"🛑 Still missing: '{col}' → Cannot continue.")
-                    st.stop()
-
-        # Final validation
-        for col in required_cols:
-            if col not in df.columns:
-                st.error(f"🛑 Still missing: '{col}' → Cannot continue.")
-                st.stop()
-
-    # --- Clean 'text' column ---
-    df['text'] = df['text'].astype(str)
-    df = df[df['text'].notna()]
-    df = df[df['text'].str.strip() != ""]
-    df = df[df['text'].str.lower() != "nan"].reset_index(drop=True)
-
-    def clean_text(text):
-        if not isinstance(text, str):
-            return ""
-        text = re.sub(r'^QT.*?;.*', lambda m: m.group(0).split(';')[0], text)
-        text = text.lower()
-        text = re.sub(r'http\S+|www\S+|https\S+', '', text)
-        text = re.sub(r"\\n|\\r|\\t", " ", text)
-        text = re.sub(r"rt @\S+", "", text, flags=re.IGNORECASE)
-        text = re.sub(r"qt @\S+", "", text, flags=re.IGNORECASE)
-        text = re.sub(r'\s+', ' ', text).strip()
-        return text
-
-    df['text'] = df['text'].apply(clean_text)
-    df = df[df['text'].str.len() > 0].reset_index(drop=True)
-
-    # --- Detect Post Type ---
-    def classify_post_type(raw_text):
-        if pd.isna(raw_text) or not isinstance(raw_text, str):
-            return "Unknown"
-        raw_text = raw_text.strip().lower()
-        if raw_text.startswith("rt @"):
-            return "Retweet"
-        elif raw_text.startswith("qt @"):
-            return "Quote Tweet"
-        elif "repost" in raw_text:
-            return "Repost"
-        else:
-            return "Original"
-
-    if 'Hit Sentence' in df.columns:
-        df['post_type'] = df['Hit Sentence'].apply(classify_post_type)
+    # --- Create 'text' column ---
+    text_candidates_fallback = ['text', 'Hit Sentence', 'Opening Text', 'Headline', 'message', 'title', 'content', 'description', 'Body', 'FullText']
+    chosen_text_col = find_column(df, user_text_col, text_candidates_fallback)
+    if chosen_text_col:
+        df['text'] = df[chosen_text_col].astype(str).replace('nan', np.nan).fillna('')
     else:
-        df['post_type'] = df['text'].apply(classify_post_type)
+        st.warning(f"⚠️ No suitable text column found. Tried '{user_text_col}' and {text_candidates_fallback}. 'text' column might be empty.")
+        df['text'] = ""
 
-    # --- Use 'text' as 'content_id' ---
-    df['content_id'] = df['text'].str[:50] + "..."
+    df['text'] = df['text'].astype(str).replace('nan', np.nan)
+    df = df.dropna(subset=['text']).reset_index(drop=True)
+    
+    # Corrected line: filter the DataFrame directly, not just the 'text' column assignment
+    df = df[df['text'].str.strip() != ""].reset_index(drop=True)
 
-    # --- Extract Hashtags ---
-    df['hashtags'] = df['text'].str.findall(r'#\w+') \
-                       .apply(lambda tags: [tag.lower() for tag in tags if len(tag) > 1])
+    # --- Populate 'Influencer' column ---
+    influencer_candidates_fallback = [
+        'Influencer', 'author', 'username', 'user', 'authorMeta/name', 'creator', 'authorname', 'Source', 'media_name'
+    ]
+    chosen_influencer_col = find_column(df, user_influencer_col, influencer_candidates_fallback)
+
+    if chosen_influencer_col:
+        df['Influencer'] = df[chosen_influencer_col].astype(str).replace('nan', np.nan).fillna('Unknown_User')
+    else:
+        st.warning(f"⚠️ No suitable Influencer column found. Tried '{user_influencer_col}' and {influencer_candidates_fallback}. Falling back to 'Outlet' if available, otherwise 'Unknown_User'.")
+        # Fallback to Outlet if no direct influencer column is found
+        outlet_candidates_fallback = ['media_name', 'channeltitle', 'source']
+        chosen_outlet_col = find_column(df, user_outlet_col, outlet_candidates_fallback)
+        if chosen_outlet_col:
+            df['Influencer'] = df[chosen_outlet_col].astype(str).replace('nan', np.nan).fillna('Unknown_User')
+            st.info(f"Using '{chosen_outlet_col}' as 'Influencer' column.")
+        else:
+            df['Influencer'] = "Unknown_User"
+            st.warning("⚠️ No suitable Outlet column found to fall back on for Influencer. Influencer column set to 'Unknown_User'.")
+    df['Influencer'] = df['Influencer'].astype(str).replace('nan', np.nan).fillna('Unknown_User')
 
     # --- Timestamp Parsing ---
-    if 'Timestamp' not in df.columns:
-        df['Timestamp'] = pd.Timestamp.now(tz='UTC')
-        st.warning("⚠️ No timestamp column found. Using current time.")
+    df['Timestamp'] = pd.NaT # Initialize with Not a Time
+    date_candidates_fallback = ['Date', 'createTimeISO', 'published_date', 'pubDate', 'created_at', 'Alternate Date Format', 'publish_date']
+    chosen_timestamp_col = find_column(df, user_timestamp_col, date_candidates_fallback)
+
+    if chosen_timestamp_col:
+        df['Timestamp'] = pd.to_datetime(df[chosen_timestamp_col], errors='coerce')
+    else:
+        st.warning(f"⚠️ No suitable Timestamp column found. Tried '{user_timestamp_col}' and {date_candidates_fallback}. Timestamp column might be incomplete.")
 
     date_formats = [
         '%b %d, %Y @ %H:%M:%S.%f', '%d-%b-%Y %I:%M%p', '%Y-%m-%d %H:%M:%S',
         '%d/%m/%Y %H:%M:%S', '%m/%d/%Y %H:%M:%S', '%Y-%m-%dT%H:%M:%SZ',
         '%Y-%m-%d %H:%M:%S.%f', '%d %b %Y %H:%M:%S', '%A, %d %b %Y %H:%M:%S',
         '%b %d, %Y %I:%M%p', '%d %b %Y %I:%M%p', '%Y-%m-%d %H:%M:%S%z',
+        '%Y-%m-%d', '%m/%d/%Y', '%d %b %Y',
     ]
 
-    def parse_timestamp(timestamp):
+    def parse_timestamp_robust(timestamp):
         if pd.isna(timestamp):
             return pd.NaT
+        if isinstance(timestamp, pd.Timestamp):
+            return timestamp
+
+        parsed = pd.to_datetime(timestamp, errors='coerce')
+        if pd.notna(parsed): return parsed
+
         for fmt in date_formats:
             try:
                 parsed = pd.to_datetime(timestamp, format=fmt, errors='coerce')
-                if pd.notna(parsed):
-                    return parsed
-            except (ValueError, TypeError):
-                continue
-        return pd.to_datetime(timestamp, infer_datetime_format=True, errors='coerce')
+                if pd.notna(parsed): return parsed
+            except (ValueError, TypeError): continue
+        return pd.NaT
 
-    df['Timestamp'] = df['Timestamp'].apply(parse_timestamp)
-    df = df.dropna(subset=['Timestamp']).reset_index(drop=True)
+    # Apply robust parsing to any remaining NaT values
+    if df['Timestamp'].isna().any():
+        if chosen_timestamp_col:
+            # Re-attempt parsing for NaNs in the chosen column
+            df.loc[df['Timestamp'].isna(), 'Timestamp'] = df.loc[df['Timestamp'].isna(), chosen_timestamp_col].apply(parse_timestamp_robust)
+        else:
+            # If no column was initially chosen, iterate through fallbacks for NaNs
+            for col_name in date_candidates_fallback:
+                # Find the actual column name (case-insensitive)
+                df_columns_lower = [col.lower() for col in df.columns]
+                if col_name.lower() in df_columns_lower:
+                    actual_fallback_col = df.columns[df_columns_lower.index(col_name.lower())]
+                    df.loc[df['Timestamp'].isna(), 'Timestamp'] = df.loc[df['Timestamp'].isna(), actual_fallback_col].apply(parse_timestamp_robust)
+                    if not df['Timestamp'].isna().all():
+                        break
 
-    # --- Create 'Platform' from URL ---
-    url_cols = ['URL', 'url', 'webVideoUrl', 'link', 'post_url', 'Parent URL']
-    url_found = False
-    for col in url_cols:
-        if col in df.columns:
-            df['URL'] = df[col].astype(str).replace('nan', '').replace('None', '')
-            url_found = True
-            break
+    df['Timestamp'] = df['Timestamp'].apply(lambda x: x.tz_localize('UTC') if pd.notna(x) and x.tzinfo is None else x.tz_convert('UTC'))
+    df = df.dropna(subset=["Timestamp"]).reset_index(drop=True)
 
-    if url_found:
+    # --- Create 'URL' column ---
+    url_candidates_fallback = ['URL', 'url', 'webVideoUrl', 'link', 'post_url', 'media_url']
+    chosen_url_col = find_column(df, user_url_col, url_candidates_fallback)
+
+    if chosen_url_col:
+        df['URL'] = df[chosen_url_col].astype(str).replace('nan', np.nan).fillna(np.nan)
+    else:
+        df['URL'] = np.nan
+        st.sidebar.warning(f"⚠️ No suitable URL column found. Tried '{user_url_col}' and {url_candidates_fallback}. Platform detection will be limited.")
+
+    # --- Create 'Platform' from URL or existing 'Platform' column ---
+    if 'Platform' in df.columns and not df['Platform'].empty and df['Platform'].notna().any():
+        # If a 'Platform' column already exists in the original data, use it.
+        # Ensure its values are reasonable (e.g., string, not all NaN/empty)
+        if df['Platform'].astype(str).str.strip().eq('').all(): # if existing platform column is empty
+             if 'URL' in df.columns and pd.notna(df['URL']).any(): # Check if URL column has any valid data
+                df['Platform'] = df['URL'].apply(infer_platform_from_url)
+             else:
+                df['Platform'] = "Unknown"
+        # Otherwise, assume existing Platform column is good
+    elif 'URL' in df.columns and pd.notna(df['URL']).any(): # Check if URL column has any valid data
         df['Platform'] = df['URL'].apply(infer_platform_from_url)
     else:
         df['Platform'] = "Unknown"
-        st.sidebar.warning("⚠️ No URL column found → all platforms marked as 'Unknown'")
+        st.sidebar.warning("⚠️ No URL column found or URL column is empty → all platforms marked as 'Unknown'")
 
-    # --- Extract original text (remove RT) ---
+
+    # --- Clean Text Further (after 'text' column is finalized) ---
+    def clean_text_final(text):
+        """Applies final cleaning to the 'text' column, preserving hashtags."""
+        if not isinstance(text, str): return ""
+        text = re.sub(r'^QT.*?;.*', lambda m: m.group(0).split(';')[0], text)
+        text = re.sub(r'http\S+|www\S+|https\S+', '', text)
+        text = re.sub(r"\\n|\\r|\\t", " ", text)
+        text = re.sub(r"rt @\S+", "", text)
+        text = re.sub(r"qt @\S+", "", text)
+        text = text.lower()
+        text = re.sub(r'\s+', ' ', text).strip()
+        return text
+
+    df['text'] = df['text'].apply(clean_text_final)
+
+    # --- Extract original text (for similarity, removes RT specifically) ---
     df['original_text'] = df['text'].apply(extract_original_text)
+
+    # --- Final check for empty DataFrame ---
+    if df.empty:
+        st.error("❌ No valid data after complete preprocessing.")
+        st.stop()
 
     return df
 
 # Vectorized similarity function
 def find_textual_similarities(df, threshold=0.85):
     """
-    Only analyzes ORIGINAL posts for narrative creation.
-    Amplification (RT/QT/Repost) is tracked separately.
+    Computes cosine similarity between 'original_text' entries to find similar pairs,
+    including URLs and Platforms for context.
     """
-    original_df = df[df['post_type'] == 'Original'].copy()
-
-    if len(original_df) < 2:
-        st.info("Not enough original posts for similarity analysis.")
-        return pd.DataFrame()
-
-    clean_df = original_df[['original_text', 'Influencer', 'Timestamp', 'URL', 'Platform']].copy()
+    clean_df = df[['original_text', 'Influencer', 'Timestamp', 'URL', 'Platform']].copy()
     clean_df['original_text'] = clean_df['original_text'].astype(str)
     clean_df = clean_df.dropna(subset=['original_text', 'Influencer', 'Timestamp', 'Platform'])
     clean_df = clean_df[clean_df['original_text'].str.strip() != ""]
-
     texts = clean_df['original_text'].tolist()
+
     if len(texts) < 2:
-        st.info("Not enough valid original posts for similarity analysis.")
+        st.info("Not enough valid texts for similarity analysis.")
         return pd.DataFrame()
 
     vectorizer = TfidfVectorizer(stop_words='english', max_features=10000)
     try:
         tfidf_matrix = vectorizer.fit_transform(texts)
-    except:
+    except ValueError as e:
+        st.warning(f"Could not create TF-IDF matrix. Error: {e}. This might happen if all texts are very similar or empty after processing.")
         return pd.DataFrame()
 
     sim_matrix = cosine_similarity(tfidf_matrix)
@@ -353,7 +262,6 @@ def find_textual_similarities(df, threshold=0.85):
 
     seen = set()
     similar_pairs = []
-
     for i, j in zip(idx_i, idx_j):
         key = tuple(sorted([i, j]))
         if key in seen:
@@ -361,33 +269,90 @@ def find_textual_similarities(df, threshold=0.85):
         seen.add(key)
         row1 = clean_df.iloc[i]
         row2 = clean_df.iloc[j]
-
         narrative_snippet = row1['original_text'][:150]
         if len(row1['original_text']) > 150:
             narrative_snippet += "..."
         if not narrative_snippet.strip():
             narrative_snippet = "Empty/Cleaned Text"
-
+        
         platforms_involved = sorted(list(set([row1['Platform'], row2['Platform']])))
         platforms_involved_str = ", ".join(p for p in platforms_involved if pd.notna(p) and p.strip() != "")
 
         similar_pairs.append({
             'text1': row1['original_text'],
             'influencer1': row1['Influencer'],
-            'platform1': row1['Platform'],
+            'platform1': row1['Platform'], # Added platform1
             'time1': row1['Timestamp'],
             'url1': row1['URL'],
             'text2': row2['original_text'],
             'influencer2': row2['Influencer'],
-            'platform2': row2['Platform'],
+            'platform2': row2['Platform'], # Added platform2
             'time2': row2['Timestamp'],
             'url2': row2['URL'],
             'similarity': round(sim_matrix[i, j], 3),
             'shared_narrative': narrative_snippet,
-            'platforms_involved': platforms_involved_str
+            'platforms_involved': platforms_involved_str # New column for summary
         })
-
     return pd.DataFrame(similar_pairs)
+
+# --- Clustering and Graph Building Functions ---
+def cluster_texts(df, eps=0.3, min_samples=2):
+    # Ensure 'original_text' exists before vectorizing
+    if 'original_text' not in df.columns:
+        df['original_text'] = df['text'].apply(extract_original_text) # Fallback in case it's not present
+
+    texts_to_cluster = df['original_text'].astype(str).tolist()
+
+    if not texts_to_cluster or all(text.strip() == "" for text in texts_to_cluster):
+        st.warning("No valid text data for clustering. Assigning all to cluster 0.")
+        df_copy = df.copy()
+        df_copy['cluster'] = 0
+        return df_copy
+
+    vectorizer = TfidfVectorizer(stop_words='english', max_features=5000)
+    try:
+        tfidf_matrix = vectorizer.fit_transform(texts_to_cluster)
+    except ValueError as e:
+        st.warning(f"Could not create TF-IDF matrix for clustering: {e}. Assigning all to cluster 0.")
+        df_copy = df.copy()
+        df_copy['cluster'] = 0
+        return df_copy
+
+    clustering = DBSCAN(metric='cosine', eps=eps, min_samples=min_samples).fit(tfidf_matrix)
+    df_copy = df.copy()
+    df_copy['cluster'] = clustering.labels_
+    return df_copy
+
+def build_user_interaction_graph(df):
+    G = nx.Graph()
+    grouped = df.groupby('cluster')
+    for cluster_id, group in grouped:
+        if cluster_id == -1 or len(group) < 2: # -1 is noise, or too fewer members
+            continue
+        users = group['Influencer'].dropna().unique().tolist()
+        for u1, u2 in combinations(users, 2):
+            if G.has_edge(u1, u2):
+                G[u1][u2]['weight'] += 1
+            else:
+                G.add_edge(u1, u2, weight=1)
+
+    all_influencers = df['Influencer'].dropna().unique().tolist()
+    # Capture primary platform for each influencer for node attributes
+    influencer_platform_map = df.groupby('Influencer')['Platform'].apply(lambda x: x.mode()[0] if not x.mode().empty else 'Unknown').to_dict()
+
+    for inf in all_influencers:
+        if inf not in G.nodes():
+            G.add_node(inf)
+        G.nodes[inf]['platform'] = influencer_platform_map.get(inf, 'Unknown')
+
+
+    pos = nx.spring_layout(G, seed=42, k=0.1, iterations=50)
+
+    cluster_map = df.set_index('Influencer')['cluster'].to_dict()
+    final_cluster_map = {node: cluster_map.get(node, 0) for node in G.nodes()} # Default to 0 if not in a cluster
+
+    return G, pos, final_cluster_map
+
 
 # --- Cached Expensive Functions ---
 @st.cache_data(show_spinner="🔍 Computing textual similarities...")
@@ -396,132 +361,179 @@ def cached_similarity_analysis(_df, threshold=0.85):
 
 @st.cache_data(show_spinner="🧩 Clustering texts...")
 def cached_clustering(_df):
-    try:
-        from modules.clustering_utils import cluster_texts
-        return cluster_texts(_df)
-    except:
-        _df = _df.copy()
-        _df['cluster'] = 0
-        return _df
+    """
+    Performstext clustering using the integrated DBSCAN clustering function.
+    """
+    return cluster_texts(_df)
 
 @st.cache_data(show_spinner="🕸️ Building network graph...")
-def cached_network_graph(_df):
-    try:
-        from modules.clustering_utils import build_user_interaction_graph
-        return build_user_interaction_graph(_df)
-    except:
-        G = nx.Graph()
-        nodes = _df['Influencer'].dropna().unique()[:10]
-        for u in nodes:
-            G.add_node(u)
-            for v in nodes:
-                if u != v:
-                    G.add_edge(u, v, weight=1)
-        pos = nx.spring_layout(G, seed=42)
-        cluster_map = {n: 0 for n in G.nodes}
-        return G, pos, cluster_map
+def cached_network_graph(_df_for_graph):
+    """
+    Builds a user interaction network graph using the integrated function.
+    Takes a potentially filtered DataFrame for the graph.
+    """
+    return build_user_interaction_graph(_df_for_graph)
 
-# --- Sidebar: Data Source Selection ---
+# --- Data Source Selection ---
 st.sidebar.header("📥 Data Source")
-data_source = st.sidebar.radio(
+data_source_option = st.sidebar.radio(
     "Choose data source:",
-    ("Use Default Datasets", "Upload CSV Files")
+    ("Use Default Data", "Upload CSV")
 )
 
 df = pd.DataFrame()
 
-if data_source == "Use Default Datasets":
-    with st.spinner("📥 Loading and combining Meltwater and Media data..."):
-        meltwater_df, civicsignals_df = load_default_datasets()
-        df = combine_social_media_data(meltwater_df, civicsignals_df)
-    if df.empty:
-        st.warning("No data loaded from default datasets.")
-        st.stop()
-    st.sidebar.success(f"✅ Combined {len(df)} posts from Meltwater and Media")
-
-elif data_source == "Upload CSV Files":
-    st.sidebar.info("Upload CSVs from Meltwater, CivicSignals, and/or Open-Measure")
-
-    uploaded_meltwater = st.sidebar.file_uploader("Upload Meltwater CSV", type=["csv"], key="meltwater")
-    uploaded_civicsignals = st.sidebar.file_uploader("Upload CivicSignals CSV", type=["csv"], key="civicsignals")
-    uploaded_openmeasure = st.sidebar.file_uploader("Upload Open-Measure CSV", type=["csv"], key="openmeasure")
-
-    if uploaded_meltwater or uploaded_civicsignals or uploaded_openmeasure:
-        # Handle Meltwater with encoding detection
-        if uploaded_meltwater:
-            bytes_data = uploaded_meltwater.getvalue()
-            encodings = ['utf-8-sig', 'utf-16', 'latin1', 'iso-8859-1']
-            success = False
-            for enc in encodings:
-                try:
-                    meltwater_df = pd.read_csv(BytesIO(bytes_data), sep=',', encoding=enc)
-                    st.sidebar.success(f"✅ Meltwater: Loaded {len(meltwater_df)} rows (decoded with {enc})")
-                    success = True
-                    break
-                except Exception:
-                    continue
-            if not success:
-                st.error("❌ Failed to read Meltwater CSV: Could not decode with any encoding.")
-                st.stop()
+if data_source_option == "Use Default Data":
+    df = load_default_dataset()
+elif data_source_option == "Upload CSV":
+    uploaded_files = st.sidebar.file_uploader("Upload your CSV file(s)", type=["csv"], accept_multiple_files=True)
+    if uploaded_files:
+        if len(uploaded_files) > 1:
+            st.sidebar.warning("You uploaded multiple files. For best results, consider harmonizing column names (e.g., 'text', 'influencer') across files before upload if they differ significantly.")
+        dfs_from_upload = []
+        for uploaded_file in uploaded_files:
+            try:
+                df_temp = pd.read_csv(uploaded_file)
+                dfs_from_upload.append(df_temp)
+                st.sidebar.success(f"✅ CSV '{uploaded_file.name}' uploaded successfully!")
+            except Exception as e:
+                st.error(f"Error reading CSV file '{uploaded_file.name}': {e}")
+        if dfs_from_upload:
+            df = pd.concat(dfs_from_upload, ignore_index=True)
+            st.sidebar.info(f"Combined data from {len(dfs_from_upload)} file(s).")
         else:
-            meltwater_df = pd.DataFrame()
-
-        civicsignals_df = pd.read_csv(uploaded_civicsignals) if uploaded_civicsignals else pd.DataFrame()
-        if not civicsignals_df.empty:
-            st.sidebar.success(f"✅ CivicSignal: Loaded {len(civicsignals_df)} rows")
-
-        openmeasure_df = pd.read_csv(uploaded_openmeasure) if uploaded_openmeasure else pd.DataFrame()
-        if not openmeasure_df.empty:
-            st.sidebar.success(f"✅ Open-Measure: Loaded {len(openmeasure_df)} rows")
-
-        with st.spinner("Combining uploaded datasets..."):
-            df = combine_social_media_data(meltwater_df, civicsignals_df, openmeasure_df)
-        st.sidebar.success(f"✅ Combined {len(df)} posts from uploaded files")
+            st.error("No valid CSV files were uploaded or could be processed.")
+            df = pd.DataFrame()
     else:
-        st.warning("Please upload at least one CSV file.")
-        st.stop()
+        df = pd.DataFrame()
 
-# --- Preprocess ---
-df = preprocess_data(df)
-if df.empty:
-    st.error("❌ No valid data after preprocessing.")
+# Exit if no data after selection
+if df is None or df.empty:
+    st.warning("No data available. Please select a data source and ensure it's valid.")
     st.stop()
 
-# --- Download Combined Data ---
-st.sidebar.markdown("### 💾 Download Combined Data")
+# Get columns for selectboxes
+all_columns = df.columns.tolist()
+# Add a default selection option at the beginning
+column_selection_options = ["-- Select Column --"] + all_columns
+
+# Function to get default index for selectbox (case-insensitive)
+def get_default_index(col_name, options):
+    try:
+        lower_options = [opt.lower() for opt in options]
+        # First, try exact match, then case-insensitive match
+        if col_name in options:
+            return options.index(col_name)
+        
+        if col_name.lower() in lower_options:
+            return lower_options.index(col_name.lower()) # Return index of the first match
+    except ValueError:
+        pass
+    return 0 # Default to "-- Select Column --"
+
+# --- Flexible Column Mapping Input ---
+st.sidebar.header("⚙️ Column Mappings")
+st.sidebar.markdown("Please select the correct columns from your data:")
+
+user_text_col = st.sidebar.selectbox(
+    "Main Text Column",
+    options=column_selection_options,
+    index=get_default_index("text", column_selection_options),
+    help="Select the column containing the main text of the posts (e.g., 'message', 'content', 'FullText')."
+)
+user_influencer_col = st.sidebar.selectbox(
+    "Influencer/Author Column",
+    options=column_selection_options,
+    index=get_default_index("Influencer", column_selection_options),
+    help="Select the column identifying the influencer or author (e.g., 'username', 'author', 'Source')."
+)
+user_timestamp_col = st.sidebar.selectbox(
+    "Timestamp Column",
+    options=column_selection_options,
+    index=get_default_index("Timestamp", column_selection_options),
+    help="Select the column containing the date and time of the post (e.g., 'Date', 'published_date', 'created_at')."
+)
+user_url_col = st.sidebar.selectbox(
+    "URL Column",
+    options=column_selection_options,
+    index=get_default_index("URL", column_selection_options),
+    help="Select the column with the URL of the post (e.g., 'link', 'post_url', 'webVideoUrl'). This is used to infer the platform."
+)
+user_outlet_col = st.sidebar.selectbox(
+    "Media Outlet/Channel Column (Optional)",
+    options=column_selection_options,
+    index=get_default_index("Outlet", column_selection_options),
+    help="Select the column for media outlet or channel. This can be used as a fallback for Influencer if no specific influencer column is found."
+)
+
+# Warn if default selection is still present for critical columns
+if "-- Select Column --" in [user_text_col, user_influencer_col, user_timestamp_col]:
+    st.sidebar.warning("Please ensure all required column mappings are selected from the dropdowns.")
+    st.stop()
+
+
+# --- Preprocess ---
+with st.spinner("⏳ Preprocessing data..."):
+    df = preprocess_data(df, user_text_col, user_influencer_col, user_timestamp_col, user_url_col, user_outlet_col)
+
+# Exit if no data after preprocessing
+if df.empty:
+    st.warning("No valid data available after preprocessing. Please check your data file and column mappings.")
+    st.stop()
+
+# --- Sidebar Filters (Global Filters) ---
+st.sidebar.header("🔍 Global Filters (Apply to all tabs)")
+
+if not pd.api.types.is_datetime64_any_dtype(df['Timestamp']):
+    st.error("Timestamp column is not in datetime format after preprocessing. Cannot apply date filter.")
+    st.stop()
+
+min_date = df['Timestamp'].min().date()
+max_date = df['Timestamp'].max().date()
+
+selected_date_range = st.sidebar.date_input(
+    "Date Range",
+    value=[min_date, max_date],
+    min_value=min_date,
+    max_value=max_date
+)
+
+if len(selected_date_range) == 2:
+    start_dt = pd.Timestamp(selected_date_range[0], tz='UTC')
+    end_dt = pd.Timestamp(selected_date_range[1], tz='UTC') + pd.Timedelta(days=1) - pd.Timedelta(microseconds=1)
+elif len(selected_date_range) == 1:
+    start_dt = pd.Timestamp(selected_date_range[0], tz='UTC')
+    end_dt = start_dt + pd.Timedelta(days=1) - pd.Timedelta(microseconds=1)
+else:
+    start_dt = df['Timestamp'].min()
+    end_dt = df['Timestamp'].max()
+
+available_platforms_global = df['Platform'].dropna().astype(str).unique().tolist()
+platforms_global = st.sidebar.multiselect(
+    "Platforms",
+    options=available_platforms_global,
+    default=available_platforms_global
+)
+
+# Apply global filters
+filtered_df_global = df[
+    (df['Timestamp'] >= start_dt) &
+    (df['Timestamp'] <= end_dt) &
+    (df['Platform'].isin(platforms_global))
+].copy()
+
+if filtered_df_global.empty:
+    st.warning("No data matches the selected global filters. Please adjust the date range or platforms.")
+    st.stop()
+
+# Export button
+st.sidebar.markdown("### 📄 Export Results")
 @st.cache_data
 def convert_df(data):
     return data.to_csv(index=False).encode('utf-8')
 
-combined_csv = convert_df(df)
-st.sidebar.download_button(
-    "Download Combined Dataset",
-    combined_csv,
-    "combined_data.csv",
-    "text/csv"
-)
-
-# --- Sidebar Filters ---
-st.sidebar.header("🔍 Filters")
-available_platforms = df['Platform'].dropna().astype(str).unique().tolist()
-platforms = st.sidebar.multiselect(
-    "Platforms",
-    options=available_platforms,
-    default=available_platforms
-)
-
-# Apply platform filter
-filtered_df = df[df['Platform'].isin(platforms)].copy() if platforms else df.copy()
-
-# Export button
-st.sidebar.markdown("### 📄 Export Filtered Results")
-filtered_csv = convert_df(filtered_df)
-st.sidebar.download_button(
-    "Download Filtered Data",
-    filtered_csv,
-    "filtered_data.csv",
-    "text/csv"
-)
+csv_data = convert_df(filtered_df_global)
+st.sidebar.download_button("Download Filtered Data", csv_data, "filtered_data.csv", "text/csv")
 
 # --- Tabs ---
 tab1, tab2, tab3 = st.tabs(["📊 Overview", "🔍 Analysis", "🌐 Network & Risk"])
@@ -530,334 +542,366 @@ tab1, tab2, tab3 = st.tabs(["📊 Overview", "🔍 Analysis", "🌐 Network & Ri
 with tab1:
     st.subheader("📌 Summary Statistics")
 
-    # Top 10 Influencers
-    top_influencers = filtered_df['Influencer'].value_counts().head(10)
-    fig_src = px.bar(top_influencers, title="Top 10 Influencers", labels={'value': 'Posts', 'index': 'Influencer'})
-    st.plotly_chart(fig_src, use_container_width=True)
-    st.markdown("**Top 10 Influencers**: Shows the most active accounts based on number of posts.")
+    st.markdown("### 🔬 Preprocessed Data Sample")
+    st.write("Check the values in 'Influencer', 'Platform', and 'URL' columns below to ensure they are correctly identified after preprocessing.")
+    st.dataframe(df[['Influencer', 'Platform', 'URL']].head(10))
+    st.markdown("---")
 
-    # Top 10 Outlets
-    if 'Outlet' in filtered_df.columns:
-        top_outlets = filtered_df['Outlet'].value_counts().head(10)
-        fig_out = px.bar(top_outlets, title="Top 10 Outlets", labels={'value': 'Articles', 'index': 'Outlet'})
-        st.plotly_chart(fig_out, use_container_width=True)
-        st.markdown("**Top 10 Outlets**: Ranks media outlets by number of published articles.")
+    if not filtered_df_global.empty:
+        st.write("This chart shows the top 10 influencers by the number of posts in the filtered dataset.")
+        top_influencers = filtered_df_global['Influencer'].value_counts().head(10)
+        fig_src = px.bar(top_influencers, title="Top 10 Influencers", labels={'value': 'Posts', 'index': 'Influencer'})
+        st.plotly_chart(fig_src, use_container_width=True)
 
-    # Top 10 Channels
-    if 'Channel' in filtered_df.columns:
-        top_channels = filtered_df['Channel'].value_counts().head(10)
-        fig_chan = px.bar(top_channels, title="Top 10 Channels", labels={'value': 'Posts', 'index': 'Channel'})
-        st.plotly_chart(fig_chan, use_container_width=True)
-        st.markdown("**Top 10 Channels**: Displays the most active social media or YouTube channels.")
-
-    # Top 10 Hashtags
-    if 'hashtags' in filtered_df.columns:
-        all_hashtags = [tag for tags in filtered_df['hashtags'] for tag in tags]
-        if all_hashtags:
-            hashtag_counts = pd.Series(all_hashtags).value_counts().head(10)
-            fig_ht = px.bar(hashtag_counts, title="Top 10 Hashtags", labels={'value': 'Frequency', 'index': 'Hashtag'})
-            st.plotly_chart(fig_ht, use_container_width=True)
-            st.markdown("**Top 10 Hashtags**: Highlights the most frequently used hashtags across posts.")
+        if 'Platform' in filtered_df_global.columns and not filtered_df_global['Platform'].empty:
+            st.write("This chart displays the distribution of posts across all identified social media and media platforms in the dataset.")
+            all_platforms_counts = filtered_df_global['Platform'].value_counts()
+            fig_platform = px.bar(all_platforms_counts, title="Post Distribution by Platform", labels={'value': 'Posts', 'index': 'Platform'})
+            st.plotly_chart(fig_platform, use_container_width=True)
         else:
-            st.info("No valid hashtags found in the data.")
+            st.info("No 'Platform' column found or no data for platforms. This typically happens if no URLs are present in the data.")
 
-    # Daily Post Volume
-    time_series = filtered_df.set_index('Timestamp').resample('D').size()
-    fig_ts = px.area(time_series, title="Daily Post Volume", labels={'value': 'Number of Posts', 'Timestamp': 'Date'}, markers=True)
-    fig_ts.update_layout(xaxis_title="Date", yaxis_title="Number of Posts")
-    st.plotly_chart(fig_ts, use_container_width=True)
-    st.markdown("**Daily Post Volume**: Visualizes the volume of posts over time to identify spikes or trends.")
+        if 'Outlet' in filtered_df_global.columns and not filtered_df_global['Outlet'].empty:
+            st.write("This chart illustrates the top 10 media outlets or channels where content was published.")
+            top_outlets = filtered_df_global['Outlet'].value_counts().head(10)
+            fig_outlet = px.bar(top_outlets, title="Top 10 Media Outlets/Channels", labels={'value': 'Posts', 'index': 'Outlet'})
+            st.plotly_chart(fig_outlet, use_container_width=True)
+        # Note: 'Channel' is no longer a primary target, as 'Outlet' handles this via mapping/fallbacks.
+        # This elif block is kept for backward compatibility if 'Channel' exists and 'Outlet' does not.
+        elif 'Channel' in filtered_df_global.columns and not filtered_df_global['Channel'].empty:
+            st.write("This chart illustrates the top 10 channels where content was published.")
+            top_channels = filtered_df_global['Channel'].value_counts().head(10)
+            fig_chan = px.bar(top_channels, title="Top 10 Channels", labels={'value': 'Posts', 'index': 'Channel'})
+            st.plotly_chart(fig_chan, use_container_width=True)
+
+        # Conditional display for Top 10 Hashtags - only for non-Media platforms
+        if 'Platform' in filtered_df_global.columns and not filtered_df_global['Platform'].empty:
+            social_media_df = filtered_df_global[filtered_df_global['Platform'] != 'Media'].copy()
+            
+            if social_media_df.empty:
+                st.info("Hashtag analysis skipped: No social media (non-'Media') content found in the filtered data.")
+            else:
+                if 'text' in social_media_df.columns and not social_media_df['text'].empty:
+                    st.write("This chart highlights the top 10 most frequently used hashtags, focusing on social media content where hashtags are typically relevant.")
+                    social_media_df['hashtags'] = social_media_df['text'].astype(str).str.findall(r'#\w+').apply(lambda x: [tag.lower() for tag in x])
+
+                    all_hashtags = [tag for tags_list in social_media_df['hashtags'] if isinstance(tags_list, list) for tag in tags_list if tags_list]
+
+                    if all_hashtags:
+                        hashtag_counts = pd.Series(all_hashtags).value_counts().head(10)
+                        fig_ht = px.bar(hashtag_counts, title="Top 10 Hashtags (Social Media Only)", labels={'value': 'Frequency', 'index': 'Hashtag'})
+                        st.plotly_chart(fig_ht, use_container_width=True)
+                    else:
+                        st.info("No hashtags found in the social media 'text' column.")
+                else:
+                    st.info("No 'text' column found or it's empty to extract hashtags from social media content.")
+        else:
+            st.info("Cannot determine platform for hashtag analysis (no 'Platform' column or empty).")
+
+
+        st.write("This area chart visualizes the daily volume of posts over the selected date range.")
+        time_series = filtered_df_global.set_index('Timestamp').resample('D').size()
+        fig_ts = px.area(time_series, title="Daily Post Volume", labels={'value': 'Number of Posts', 'Timestamp': 'Date'})
+        st.plotly_chart(fig_ts, use_container_width=True)
+    else:
+        st.info("No data available to display summary statistics.")
 
 # ==================== TAB 2: Similarity & Coordination ====================
 with tab2:
     st.subheader("🧠 Narrative Detection & Coordination")
     st.markdown("""
-        **Purpose**: Identifies coordinated messaging by detecting highly similar text across different influencers. 
-        Only original posts (not retweets or reposts) are analyzed to distinguish true narrative reuse from amplification.
+        This section helps identify **coordination** by finding very similar messages posted by different influencers.
+        When different accounts share very similar messages, it can suggest they are working together or amplifying the same ideas.
+        A high similarity score (close to 1.0) means the texts are almost identical.
     """)
+    
     st.markdown("---")
+    st.subheader("Filters for Analysis (Tab 2 Only)")
+    available_platforms_analysis = filtered_df_global['Platform'].dropna().astype(str).unique().tolist()
+    platforms_analysis = st.multiselect(
+        "Platforms to include in Similarity Analysis:",
+        options=available_platforms_analysis,
+        default=available_platforms_analysis,
+        key="platforms_analysis_tab2" # Unique key for this widget
+    )
+    
+    analysis_df_filtered_by_platform = filtered_df_global[filtered_df_global['Platform'].isin(platforms_analysis)].copy()
 
-    if coordination_mode == "Text Content":
-        platforms_analysis = st.multiselect(
-            "Platforms to include in Similarity Analysis:",
-            options=filtered_df_global['Platform'].dropna().astype(str).unique().tolist(),
-            default=filtered_df_global['Platform'].dropna().astype(str).unique().tolist(),
-            key="platforms_analysis_tab2"
-        )
+    MAX_ROWS_SIMILARITY = st.slider("Max posts to analyze for similarity (for performance)", 100, 1000, 300, key="max_rows_similarity")
+    
+    # Ensure original_text column is present and valid
+    if 'original_text' not in analysis_df_filtered_by_platform.columns:
+        analysis_df_filtered_by_platform['original_text'] = analysis_df_filtered_by_platform['text'].apply(extract_original_text)
 
-        MAX_ROWS_SIMILARITY = st.slider(
-            "Max posts to analyze for similarity (for performance)",
-            100, 1000, 300,
-            key="max_rows_similarity"
-        )
+    # Create a fresh copy of filtered_df for analysis_df to ensure cache invalidation
+    analysis_df = analysis_df_filtered_by_platform[analysis_df_filtered_by_platform['original_text'].astype(str).str.strip() != ""].head(MAX_ROWS_SIMILARITY).copy()
 
-        # Filter by platform
-        analysis_df_filtered_by_platform = filtered_df_global[
-            filtered_df_global['Platform'].isin(platforms_analysis)
-        ].copy()
-
-        # Keep only original tweets
-        original_df = analysis_df_filtered_by_platform[
-            ~analysis_df_filtered_by_platform['object_id'].astype(str).str.startswith('RT @') &
-            ~analysis_df_filtered_by_platform['object_id'].astype(str).str.startswith('qt @') &
-            ~analysis_df_filtered_by_platform['object_id'].astype(str).str.contains('repost', case=False, na=False)
-        ].copy()
-
-        if 'original_text' not in original_df.columns:
-            original_df['original_text'] = original_df['object_id'].astype(str)
-
-        analysis_df = original_df[
-            (original_df['original_text'].astype(str).str.strip() != "") &
-            (original_df['original_text'].str.lower() != "nan")
-        ].head(MAX_ROWS_SIMILARITY).copy()
-
-        if len(analysis_df) < 2:
-            st.info("Not enough original posts for similarity analysis.")
-        else:
-            st.markdown("### 🔍 Text Similarity Analysis on Original Posts Only")
-            st.markdown("""
-                **Method**: Uses TF-IDF and cosine similarity to detect posts with nearly identical wording. 
-                This helps uncover copy-paste coordination or shared messaging.
-            """)
-            with st.spinner(f"🔍 Finding coordinated narratives among {len(analysis_df)} original posts..."):
-                sim_df = cached_similarity_analysis(analysis_df, threshold=0.85)
-
-            if not sim_df.empty:
-                st.success(f"✅ Found {len(sim_df)} similar pairs among original posts.")
-
-                def get_repost_count(narrative):
-                    pattern = re.escape(narrative.lower()[:20])
-                    repost_df = filtered_df_global[
-                        filtered_df_global['object_id'].astype(str).str.contains('repost', case=False, na=False) |
-                        filtered_df_global['object_id'].astype(str).str.startswith('RT @') |
-                        filtered_df_global['object_id'].astype(str).str.startswith('qt @')
-                    ]
-                    return repost_df['object_id'].astype(str).str.contains(pattern, case=False, na=False).sum()
-
-                narrative_summary = sim_df.groupby('shared_narrative').agg(
-                    share_count=('similarity', 'count'),
-                    influencers_involved=('account_id1', lambda x: ", ".join(x.astype(str).unique()[:5]) + ("..." if len(x.unique()) > 5 else "")),
-                    platforms_involved=('platform1', lambda x: ", ".join(sorted(set(p.strip() for p in x.astype(str).tolist() if p.strip() != "")))),
-                    repost_count=('shared_narrative', lambda x: get_repost_count(x.iloc[0]))
-                ).sort_values(by='share_count', ascending=False).reset_index()
-
-                st.markdown("### 🔝 Top Coordinated Narratives")
-                st.markdown("""
-                    **Top Coordinated Narratives**: Shows the most frequently reused messages. 
-                    Bar color indicates amplification level via reposts, retweets, or quote tweets.
-                """)
-                fig_nar = px.bar(
-                    narrative_summary.head(10),
-                    x='share_count',
-                    y='shared_narrative',
-                    orientation='h',
-                    title="Top 10 Most Shared Narratives",
-                    labels={'shared_narrative': 'Narrative Snippet', 'share_count': 'Copy-Paste Count'},
-                    color='repost_count',
-                    color_continuous_scale='Blues',
-                    hover_data=['repost_count']
-                )
-                st.plotly_chart(fig_nar, use_container_width=True)
-
-                st.dataframe(narrative_summary)
-
-                st.markdown("### 🔄 Full Similarity Pairs")
-                st.markdown("""
-                    **Full Similarity Pairs**: Lists all detected pairs of highly similar posts. 
-                    Use the links to verify context and trace narrative spread.
-                """)
-                display_sim_df = sim_df[[
-                    'text1', 'account_id1', 'platform1', 'timestamp_share1', 'url1',
-                    'text2', 'account_id2', 'platform2', 'timestamp_share2', 'url2',
-                    'similarity'
-                ]].copy()
-
-                display_sim_df = display_sim_df.rename(columns={
-                    'account_id1': 'Influencer 1', 'account_id2': 'Influencer 2',
-                    'platform1': 'Platform 1', 'platform2': 'Platform 2',
-                    'timestamp_share1': 'Time 1', 'timestamp_share2': 'Time 2',
-                    'url1': 'URL 1', 'url2': 'URL 2', 'similarity': 'Similarity'
-                })
-
-                for col in ['Time 1', 'Time 2']:
-                    if col in display_sim_df.columns:
-                        display_sim_df[col] = pd.to_datetime(
-                            display_sim_df[col], unit='s', utc=True, errors='coerce'
-                        ).dt.strftime('%Y-%m-%d %H:%M')
-
-                st.data_editor(
-                    display_sim_df,
-                    column_config={
-                        "URL 1": st.column_config.LinkColumn("URL 1"),
-                        "URL 2": st.column_config.LinkColumn("URL 2")
-                    },
-                    hide_index=True,
-                    use_container_width=True
-                )
-            else:
-                st.info("No significant similarities found above threshold between original posts.")
+    if analysis_df.empty:
+        st.info("No valid text data available for similarity analysis after applying filters and row limit.")
     else:
-        st.subheader("🔗 Coordination by Shared URLs")
-        st.markdown("""
-            **Shared URLs Analysis**: Detects coordination through repeated sharing of the same links. 
-            Even if text differs, shared URLs suggest coordinated amplification.
-        """)
-        url_df = filtered_df_global[
-            (filtered_df_global['URL'].notna()) &
-            (filtered_df_global['URL'].str.strip() != "") &
-            (filtered_df_global['URL'] != "Unknown")
-        ].copy()
-        if not url_df.empty:
-            url_counts = url_df.groupby('URL')['account_id'].nunique()
-            shared_urls = url_counts[url_counts >= 2].index.tolist()
-            if shared_urls:
-                st.success(f"✅ Found {len(shared_urls)} URLs shared by multiple influencers.")
-                url_summary = url_df[url_df['URL'].isin(shared_urls)].groupby('URL').agg(
-                    share_count=('account_id', 'nunique'),
-                    influencers=('account_id', lambda x: ", ".join(x.unique())),
-                    platforms=('Platform', lambda x: ", ".join(sorted(x.unique())))
-                ).sort_values(by='share_count', ascending=False).reset_index()
-                st.data_editor(
-                    url_summary,
-                    column_config={"URL": st.column_config.LinkColumn("Shared URL")},
-                    hide_index=True,
-                    use_container_width=True
-                )
-            else:
-                st.info("No URLs shared by multiple influencers.")
+        with st.spinner(f"🔍 Finding coordinated narratives among {len(analysis_df)} posts..."):
+            sim_df = cached_similarity_analysis(analysis_df, threshold=0.85)
+
+        if not sim_df.empty:
+            st.success(f"✅ Found {len(sim_df)} similar pairs.")
+            narrative_summary = sim_df.groupby('shared_narrative').agg(
+                share_count=('similarity', 'count'),
+                influencers_involved=('influencer1', lambda x: ", ".join(x.astype(str).unique()[:5]) + ("..." if len(x.unique()) > 5 else "")),
+                platforms_involved=('platforms_involved', lambda x: ", ".join(sorted(list(set([p.strip() for sublist in x.tolist() for p in sublist.split(',') if p.strip() != ""]))))) # Added check for empty strings
+            ).sort_values(by='share_count', ascending=False).reset_index()
+
+            st.markdown("### 🔝 Top Coordinated Narratives")
+            st.write("This bar chart shows the top 10 narrative snippets that are shared across multiple posts, indicating potential coordination.")
+            fig_nar = px.bar(
+                narrative_summary.head(10),
+                x='share_count',
+                y='shared_narrative',
+                orientation='h',
+                title="Top 10 Most Shared Narratives",
+                labels={'shared_narrative': 'Narrative Snippet', 'share_count': 'Share Count'},
+                color='share_count',
+                color_continuous_scale='Blues'
+            )
+            st.plotly_chart(fig_nar, use_container_width=True)
+
+            st.write("This table summarizes the top coordinated narratives, including the number of shares, involved influencers, and the platforms they appeared on.")
+            st.dataframe(narrative_summary)
+            st.markdown("### 🔄 Full Similarity Pairs")
+            st.write("This table lists all detected pairs of similar texts, along with their influencers, platforms, timestamps, similarity scores, and links to the original posts for verification.")
+
+            display_sim_df = sim_df[['text1', 'influencer1', 'platform1', 'time1', 'url1', 'text2', 'influencer2', 'platform2', 'time2', 'url2', 'similarity']].copy()
+            display_sim_df['url1'] = display_sim_df['url1'].apply(lambda x: f'<a href="{x}" target="_blank">{x}</a>' if pd.notna(x) else '')
+            display_sim_df['url2'] = display_sim_df['url2'].apply(lambda x: f'<a href="{x}" target="_blank">{x}</a>' if pd.notna(x) else '')
+
+            st.markdown(display_sim_df.to_html(escape=False), unsafe_allow_html=True)
+
         else:
-            st.info("No valid URLs to analyze.")
+            st.info("No significant similarities found above threshold.")
 
 # ==================== TAB 3: Network & Risk ====================
 with tab3:
     st.subheader("🚨 High-Risk Accounts & Networks")
-    st.markdown("""
-        **Purpose**: Identifies high-risk influencers and coordination networks using clustering and graph analysis. 
-        Helps uncover hidden structures behind coordinated campaigns.
-    """)
+
     st.markdown("---")
+    st.subheader("Filters for Analysis (Tab 3 Only)")
+    available_platforms_network = filtered_df_global['Platform'].dropna().astype(str).unique().tolist()
+    platforms_network = st.multiselect(
+        "Platforms to include in Network & Risk Analysis:",
+        options=available_platforms_network,
+        default=available_platforms_network,
+        key="platforms_network_tab3" # Unique key for this widget
+    )
+    
+    network_df_filtered_by_platform = filtered_df_global[filtered_df_global['Platform'].isin(platforms_network)].copy()
 
-    risk_df = filtered_df_global.copy()
-
-    # Ensure 'text' exists
-    possible_text_columns = ['Hit Sentence', 'title', 'message', 'content', 'object_id']
-    for col in possible_text_columns:
-        if col in risk_df.columns:
-            risk_df['text'] = risk_df[col].astype(str).replace('nan', '').str.strip()
-            break
-    else:
-        st.error("❌ No text column found.")
-        st.stop()
-
-    risk_df = risk_df[risk_df['text'] != ""].reset_index(drop=True)
-    if risk_df.empty:
-        st.error("❌ No valid text after cleaning.")
-        st.stop()
-
-    # Convert timestamp
-    if 'timestamp_share' in risk_df.columns:
-        risk_df['Timestamp'] = pd.to_datetime(risk_df['timestamp_share'], unit='s', utc=True, errors='coerce')
-        risk_df = risk_df.dropna(subset=['Timestamp']).reset_index(drop=True)
-    else:
-        risk_df['Timestamp'] = pd.Timestamp.now(tz='UTC')
-
-    if 'original_text' not in risk_df.columns:
-        risk_df['original_text'] = risk_df['text'].apply(extract_original_text)
-
-    # ----------------------------
-    # 🤖 Detected Coordination Clusters
-    # ----------------------------
-    st.markdown("### 🤖 Detected Coordination Clusters")
-    st.markdown("""
-        **Detected Coordination Clusters**: Groups posts into clusters based on content similarity. 
-        Each cluster may represent a distinct narrative or disinformation campaign.
-    """)
     try:
-        clustered_df = cached_clustering(risk_df)
-        if 'cluster' not in clustered_df.columns:
-            raise ValueError("Clustering did not return 'cluster' column")
+        # Ensure original_text column is present and valid
+        if 'original_text' not in network_df_filtered_by_platform.columns:
+            network_df_filtered_by_platform['original_text'] = network_df_filtered_by_platform['text'].apply(extract_original_text)
 
-        cluster_counts = clustered_df['cluster'].value_counts()
-        if cluster_counts.empty:
-            st.info("No clusters detected.")
+        # Create a fresh copy of filtered_df for df_for_clustering to ensure cache invalidation
+        df_for_clustering = network_df_filtered_by_platform[network_df_filtered_by_platform['text'].astype(str).str.strip() != ""].copy()
+        
+        if df_for_clustering.empty:
+            st.info("No valid text data for clustering analysis.")
+            clustered_df = pd.DataFrame()
         else:
-            fig_clust = px.bar(
-                cluster_counts,
-                title="Cluster Sizes",
-                labels={'value': 'Member Count', 'index': 'Cluster ID'},
-                color=cluster_counts.index.astype(str),
-                color_discrete_sequence=px.colors.qualitative.Set3
-            )
-            st.plotly_chart(fig_clust, use_container_width=True)
-            st.dataframe(clustered_df[['account_id', 'text', 'Timestamp', 'cluster']])
-    except Exception as e:
-        st.warning(f"⚠️ Clustering failed: {e}")
+            clustered_df = cached_clustering(df_for_clustering)
 
-    # ----------------------------
-    # 🕸️ User Interaction Network
-    # ----------------------------
+        if not clustered_df.empty:
+            cluster_counts = clustered_df['cluster'].value_counts()
+            if -1 in cluster_counts.index:
+                noise_count = cluster_counts[-1]
+                cluster_counts = cluster_counts.drop(index=-1)
+                st.info(f"💡 {noise_count} posts were identified as noise (Cluster -1) and are excluded from cluster visualization but still included in the network graph if they are influencers.")
+
+            if not cluster_counts.empty:
+                st.markdown("### 🤖 Detected Coordination Clusters")
+                st.write("This chart visualizes the sizes of detected clusters, where each cluster represents a group of coordinated texts.")
+                fig_clust = px.bar(
+                    cluster_counts,
+                    title="Cluster Sizes",
+                    labels={'value': 'Member Count', 'index': 'Cluster ID'},
+                    color=cluster_counts.index.astype(str),
+                    color_discrete_sequence=px.colors.qualitative.Set3
+                )
+                st.plotly_chart(fig_clust, use_container_width=True)
+                
+                # New: Cluster Summary Table
+                st.markdown("#### Cluster Summary")
+                if not clustered_df[clustered_df['cluster'] != -1].empty:
+                    cluster_details = clustered_df[clustered_df['cluster'] != -1].groupby('cluster').agg(
+                        num_posts=('text', 'count'),
+                        num_influencers=('Influencer', 'nunique'),
+                        example_influencers=('Influencer', lambda x: ", ".join(x.unique()[:3]) + ("..." if len(x.unique()) > 3 else "")),
+                        platforms=('Platform', lambda x: ", ".join(sorted(x.unique())))
+                    ).sort_values(by='num_posts', ascending=False).reset_index()
+                    st.dataframe(cluster_details)
+                else:
+                    st.info("No detailed summary for clusters (all posts might be noise or too few posts for coordination).")
+
+                st.write("This table shows the influencers, their posts, timestamps, and their assigned cluster IDs.")
+                st.dataframe(clustered_df[['Influencer', 'Platform', 'text', 'Timestamp', 'cluster']])
+            else:
+                st.info("No significant clusters detected (all posts might be noise or too few posts for clustering).")
+        else:
+            st.info("No data available for clustering.")
+
+    except Exception as e:
+        st.warning(f"⚠️ Clustering analysis failed: {e}")
+
     st.markdown("### 🕸️ User Interaction Network")
     st.markdown("""
-        **User Interaction Network**: Visualizes connections between influencers who share similar content. 
-        Central nodes may indicate key actors in a coordination network.
+        This interactive graph shows how different **influencers** (represented by **nodes** or circles) are connected.
+        A line (or **edge**) between two influencers means they have shared similar content or been part of the same coordinated narrative (cluster).
+        
+        **How to interpret the colors:**
+        The colors of the nodes are assigned automatically to visually group influencers that belong to the same detected cluster.
+        For example, all influencers within the 'blue' group are part of one coordinated cluster, while those in the 'green' group belong to a different one.
+        The specific meaning of each color is not fixed (e.g., 'red' doesn't always mean the same thing across different analyses), but its purpose is to help you quickly see which influencers are working together on similar themes.
     """)
-    try:
-        graph_input_df = clustered_df if 'clustered_df' in locals() and not clustered_df.empty else risk_df
-        G, pos, cluster_map = cached_network_graph(graph_input_df)
+    
+    max_influencers_graph = st.slider(
+        "Max Influencers for Network Graph (for performance)",
+        min_value=10, max_value=200, value=50, step=10,
+        help="Limit the number of influencers displayed in the network graph to improve performance.",
+        key="max_influencers_graph"
+    )
 
-        if G is None or len(G.nodes()) == 0:
-            st.info("No nodes to display in the network graph.")
+    num_top_clusters_to_show = 0 # Initialize outside conditional block
+    if 'cluster_counts' in locals() and not cluster_counts.empty:
+        num_top_clusters_to_show = st.slider(
+            "Display Top N Largest Clusters in Network Graph",
+            min_value=1, max_value=len(cluster_counts.index), value=min(5, len(cluster_counts.index)), step=1,
+            help="Select how many of the largest coordinated clusters to visualize in the network graph.",
+            key='num_top_clusters_to_show'
+        )
+
+    try:
+        # Determine the DataFrame subset to use for graph generation
+        graph_df_base = clustered_df.copy() if 'clustered_df' in locals() and not clustered_df.empty else network_df_filtered_by_platform.copy()
+
+        if graph_df_base.empty or graph_df_base['Influencer'].dropna().empty:
+            st.info("No valid influencer data to build the network graph.")
         else:
-            edge_trace = []
-            for edge in G.edges():
-                x0, y0 = pos[edge[0]]
-                x1, y1 = pos[edge[1]]
-                edge_trace.append(go.Scatter(x=[x0, x1], y=[y0, y1], mode='lines', line=dict(width=0.8, color='#888'), hoverinfo='none'))
-            node_colors = [cluster_map.get(node, 0) for node in G.nodes()]
-            node_trace = go.Scatter(
-                x=[pos[node][0] for node in G.nodes()],
-                y=[pos[node][1] for node in G.nodes()],
-                text=list(G.nodes()),
-                mode='markers+text',
-                textposition="top center",
-                marker=dict(
-                    size=12,
-                    color=node_colors,
-                    colorscale=px.colors.qualitative.Set3,
-                    line=dict(width=2, color='darkblue')
-                ),
-                hoverinfo='text'
-            )
-            fig_net = go.Figure(data=edge_trace + [node_trace],
-                                layout=go.Layout(
-                                    title="User Network (Click & Drag to Explore)",
-                                    showlegend=False,
-                                    hovermode='closest',
-                                    margin=dict(b=20, l=5, r=5, t=60),
-                                    xaxis=dict(showgrid=False, zeroline=False, showticklabels=False),
-                                    yaxis=dict(showgrid=False, zeroline=False, showticklabels=False),
-                                    height=600))
-            st.plotly_chart(fig_net, use_container_width=True)
+            # Filter for top clusters if a number is selected
+            if num_top_clusters_to_show > 0 and 'cluster_counts' in locals() and not cluster_counts.empty:
+                top_cluster_ids = cluster_counts.nlargest(num_top_clusters_to_show).index.tolist()
+                # Include all posts from influencers who are part of these top clusters
+                influencers_in_top_clusters = graph_df_base[graph_df_base['cluster'].isin(top_cluster_ids)]['Influencer'].unique().tolist()
+                graph_df_filtered_for_top_clusters = graph_df_base[graph_df_base['Influencer'].isin(influencers_in_top_clusters)].copy()
+            else:
+                # If no clusters or no selection, use the general filtered network data
+                graph_df_filtered_for_top_clusters = graph_df_base.copy()
+
+            # Now, apply the overall max_influencers_graph limit to the current filtered set
+            top_active_influencers_in_subset = graph_df_filtered_for_top_clusters['Influencer'].value_counts().nlargest(max_influencers_graph).index.tolist()
+            graph_df_subset = graph_df_filtered_for_top_clusters[graph_df_filtered_for_top_clusters['Influencer'].isin(top_active_influencers_in_subset)].copy()
+
+
+            if graph_df_subset.empty:
+                st.info("No data for selected influencers to build the network graph. Try increasing the 'Max Influencers for Network Graph' slider or adjusting cluster selection.")
+            else:
+                G, pos, cluster_map = cached_network_graph(graph_df_subset)
+
+                if not G.nodes():
+                    st.info("No nodes to display in the network graph. This might be due to filtered data or issues in graph creation.")
+                else:
+                    edge_trace = []
+                    for edge in G.edges():
+                        x0, y0 = pos[edge[0]]
+                        x1, y1 = pos[edge[1]]
+                        edge_trace.append(go.Scatter(x=[x0, x1], y=[y0, y1], mode='lines', line=dict(width=0.8, color='#888'), hoverinfo='none'))
+
+                    node_colors = [cluster_map.get(node, -2) for node in G.nodes()] # Use -2 for non-clustered/noise
+                    unique_clusters = sorted(list(set(node_colors)))
+
+                    color_map = {c: i for i, c in enumerate(unique_clusters)}
+                    # Ensure enough colors are available
+                    color_palette = px.colors.qualitative.Set3 + px.colors.qualitative.Plotly
+                    extended_color_palette = color_palette * ((len(unique_clusters) // len(color_palette)) + 1)
+                    node_color_vals = [extended_color_palette[color_map[c]] for c in node_colors]
+
+                    # Calculate node sizes based on the number of *posts* for each influencer within the graph_df_subset
+                    influencer_post_counts = graph_df_subset['Influencer'].value_counts()
+                    max_node_size_display = 25 # Max desired visual size
+                    min_node_size_display = 10  # Min desired visual size
+                    
+                    if not influencer_post_counts.empty:
+                        # Normalize post counts for node sizing
+                        min_posts_val = influencer_post_counts.min()
+                        max_posts_val = influencer_post_counts.max()
+                        if max_posts_val == min_posts_val: # Avoid division by zero if all counts are same
+                            node_sizes_raw = [min_node_size_display + (max_node_size_display - min_node_size_display)/2] * len(G.nodes())
+                        else:
+                            node_sizes_raw = [
+                                min_node_size_display + (max_node_size_display - min_node_size_display) * ((influencer_post_counts.get(node, min_posts_val) - min_posts_val) / (max_posts_val - min_posts_val))
+                                for node in G.nodes()
+                            ]
+                    else:
+                        node_sizes_raw = [min_node_size_display] * len(G.nodes()) # Default size if no post counts
+
+                    colorbar_dict = dict(
+                        title="Clusters",
+                        tickvals=[color_map[c] for c in unique_clusters],
+                        ticktext=[str(c) if c != -2 else 'Not Clustered' for c in unique_clusters], # Better label for -2
+                        x=1.02,
+                        xanchor="left",
+                        len=0.7
+                    )
+
+                    node_trace = go.Scatter(
+                        x=[pos[node][0] for node in G.nodes()],
+                        y=[pos[node][1] for node in G.nodes()],
+                        text=[f"Influencer: {node}<br>Posts in Graph: {influencer_post_counts.get(node, 0)}<br>Cluster: {cluster_map.get(node, 'N/A')}<br>Platform: {G.nodes[node].get('platform', 'N/A')}" for node in G.nodes()], # Added platform and post count to hover
+                        mode='markers+text',
+                        textposition="top center",
+                        marker=dict(
+                            size=node_sizes_raw, # Use calculated sizes here
+                            color=node_color_vals,
+                            line=dict(width=2, color='darkblue'),
+                            colorbar=colorbar_dict
+                        ),
+                        hoverinfo='text'
+                    )
+
+                    st.write("This interactive graph visualizes the network of influencers, with nodes representing influencers and edges indicating interactions or shared narratives. Nodes are colored by their detected cluster.")
+                    
+                    # Corrected logic for the info message
+                    total_influencers_before_limit = graph_df_filtered_for_top_clusters['Influencer'].nunique()
+                    if len(G.nodes()) < total_influencers_before_limit:
+                         st.info(f"Displaying a subset of {len(G.nodes())} influencers out of {total_influencers_before_limit} total based on your filters and the 'Max Influencers for Network Graph' setting. Adjust the slider to include more influencers.")
+
+                    fig_net = go.Figure(data=edge_trace + [node_trace],
+                                        layout=go.Layout(
+                                            title="User Network (Click & Drag to Explore)",
+                                            showlegend=False,
+                                            hovermode='closest',
+                                            margin=dict(b=20, l=5, r=5, t=60),
+                                            xaxis=dict(showgrid=False, zeroline=False, showticklabels=False),
+                                            yaxis=dict(showgrid=False, zeroline=False, showticklabels=False),
+                                            height=600))
+                    st.plotly_chart(fig_net, use_container_width=True)
     except Exception as e:
         st.warning(f"⚠️ Network graph failed: {e}")
 
-    # ----------------------------
-    # ⚠️ High-Risk Influencers
-    # ----------------------------
     st.markdown("### ⚠️ High-Risk Influencers")
     st.markdown("""
-        **High-Risk Influencers**: Highlights accounts involved in 3 or more coordinated messages. 
-        These influencers may be amplifying narratives across multiple clusters.
+        **High-risk influencers** are those who frequently participate in **coordinated messages**.
+        This chart highlights influencers who appear in 3 or more similar messages.
+        A high count here could indicate that an influencer is a central figure in spreading specific narratives or is part of a concentrated effort.
     """)
     try:
         if 'sim_df' in locals() and not sim_df.empty:
             all_influencers = pd.concat([
-                sim_df[['account_id1']].rename(columns={'account_id1': 'account_id'}),
-                sim_df[['account_id2']].rename(columns={'account_id2': 'account_id'})
-            ])['account_id'].dropna().astype(str)
+                sim_df[['influencer1']].rename(columns={'influencer1': 'Influencer'}),
+                sim_df[['influencer2']].rename(columns={'influencer2': 'Influencer'})
+            ])['Influencer'].dropna().astype(str)
             influencer_counts = all_influencers.value_counts()
             high_risk = influencer_counts[influencer_counts >= 3]
+
             if not high_risk.empty:
+                st.write("This chart identifies influencers who appear in 3 or more coordinated messages, potentially indicating high-risk accounts.")
                 fig_hr = px.bar(
                     high_risk,
                     title="Influencers in ≥3 Coordinated Messages",
