@@ -813,8 +813,27 @@ with tab3:
     st.subheader("🚨 High-Risk Accounts & Networks")
     st.markdown("---")
 
-    # ✅ Use filtered_df_global (your actual variable name)
+    # ✅ Use filtered_df_global and make a clean copy
     risk_df = filtered_df_global.copy()
+
+    # 🔁 Convert UNIX timestamp to UTC datetime for analysis
+    if 'timestamp_share' in risk_df.columns:
+        # Convert to datetime (UTC)
+        risk_df['Timestamp'] = pd.to_datetime(risk_df['timestamp_share'], unit='s', utc=True, errors='coerce')
+        # Drop rows with invalid timestamps
+        risk_df = risk_df.dropna(subset=['Timestamp']).reset_index(drop=True)
+    else:
+        st.error("❌ 'timestamp_share' column missing. Cannot create Timestamp.")
+        st.stop()
+
+    # Ensure 'text' exists
+    if 'text' not in risk_df.columns:
+        st.error("❌ 'text' column missing. Required for clustering.")
+        st.stop()
+
+    # Ensure 'original_text' exists
+    if 'original_text' not in risk_df.columns:
+        risk_df['original_text'] = risk_df['text'].apply(extract_original_text)
 
     # ----------------------------
     # 🤖 Detected Coordination Clusters
@@ -823,63 +842,88 @@ with tab3:
         clustered_df = cached_clustering(risk_df)
         if 'cluster' not in clustered_df.columns:
             raise ValueError("Clustering did not return 'cluster' column")
-        cluster_counts = clustered_df['cluster'].value_counts()
 
-        st.markdown("### 🤖 Detected Coordination Clusters")
-        fig_clust = px.bar(
-            cluster_counts,
-            title="Cluster Sizes",
-            labels={'value': 'Member Count', 'index': 'Cluster ID'},
-            color=cluster_counts.index.astype(str),
-            color_discrete_sequence=px.colors.qualitative.Set3
-        )
-        st.plotly_chart(fig_clust, use_container_width=True)
-        st.markdown("**Detected Coordination Clusters**: Groups posts into clusters based on content similarity, revealing coordinated campaigns.")
-        st.dataframe(clustered_df[['account_id', 'text', 'Timestamp', 'cluster']])
+        cluster_counts = clustered_df['cluster'].value_counts()
+        if cluster_counts.empty:
+            st.info("No clusters detected (e.g., all noise or only one post).")
+        else:
+            st.markdown("### 🤖 Detected Coordination Clusters")
+            fig_clust = px.bar(
+                cluster_counts,
+                title="Cluster Sizes",
+                labels={'value': 'Member Count', 'index': 'Cluster ID'},
+                color=cluster_counts.index.astype(str),
+                color_discrete_sequence=px.colors.qualitative.Set3
+            )
+            st.plotly_chart(fig_clust, use_container_width=True)
+            st.markdown("**Detected Coordination Clusters**: Groups posts into clusters based on content similarity, revealing coordinated campaigns.")
+            st.dataframe(clustered_df[['account_id', 'text', 'Timestamp', 'cluster']])
     except Exception as e:
         st.warning(f"⚠️ Clustering failed: {e}")
+        st.write("Debug: Sample from risk_df:")
+        st.write(risk_df[['account_id', 'text', 'Timestamp']].head())
 
     # ----------------------------
     # 🕸️ User Interaction Network
     # ----------------------------
     st.markdown("### 🕸️ User Interaction Network")
     try:
-        G, pos, cluster_map = cached_network_graph(
-            clustered_df if 'clustered_df' in locals() and not clustered_df.empty else risk_df
-        )
-        edge_trace = []
-        for edge in G.edges():
-            x0, y0 = pos[edge[0]]
-            x1, y1 = pos[edge[1]]
-            edge_trace.append(go.Scatter(x=[x0, x1], y=[y0, y1], mode='lines', line=dict(width=0.8, color='#888'), hoverinfo='none'))
-        node_trace = go.Scatter(
-            x=[pos[node][0] for node in G.nodes()],
-            y=[pos[node][1] for node in G.nodes()],
-            text=list(G.nodes()),
-            mode='markers+text',
-            textposition="top center",
-            marker=dict(
-                size=12,
-                color=[cluster_map.get(node, 0) for node in G.nodes()],
-                colorscale='Set3',
-                colorbar=dict(title="Clusters"),
-                line=dict(width=2, color='darkblue')
-            ),
-            hoverinfo='text'
-        )
-        fig_net = go.Figure(data=edge_trace + [node_trace],
-                            layout=go.Layout(
-                                title="User Network (Click & Drag to Explore)",
-                                showlegend=False,
-                                hovermode='closest',
-                                margin=dict(b=20, l=5, r=5, t=60),
-                                xaxis=dict(showgrid=False, zeroline=False, showticklabels=False),
-                                yaxis=dict(showgrid=False, zeroline=False, showticklabels=False),
-                                height=600))
-        st.plotly_chart(fig_net, use_container_width=True)
-        st.markdown("**User Interaction Network**: Visualizes connections between influencers who share similar content, highlighting central figures.")
+        # Use clustered_df if available, else fall back to risk_df
+        graph_input_df = clustered_df if 'clustered_df' in locals() and not clustered_df.empty else risk_df
+
+        # Ensure original_text exists
+        if 'original_text' not in graph_input_df.columns:
+            graph_input_df['original_text'] = graph_input_df['text'].apply(extract_original_text)
+
+        G, pos, cluster_map = cached_network_graph(graph_input_df)
+
+        if G is None or len(G.nodes()) == 0:
+            st.info("No nodes to display in the network graph.")
+        else:
+            edge_trace = []
+            for edge in G.edges():
+                x0, y0 = pos[edge[0]]
+                x1, y1 = pos[edge[1]]
+                edge_trace.append(go.Scatter(
+                    x=[x0, x1], y=[y0, y1],
+                    mode='lines', line=dict(width=0.8, color='#888'), hoverinfo='none'
+                ))
+
+            node_colors = [cluster_map.get(node, 0) for node in G.nodes()]
+            node_trace = go.Scatter(
+                x=[pos[node][0] for node in G.nodes()],
+                y=[pos[node][1] for node in G.nodes()],
+                text=list(G.nodes()),
+                mode='markers+text',
+                textposition="top center",
+                marker=dict(
+                    size=12,
+                    color=node_colors,
+                    colorscale='Set3',
+                    colorbar=dict(title="Clusters"),
+                    line=dict(width=2, color='darkblue')
+                ),
+                hoverinfo='text'
+            )
+
+            fig_net = go.Figure(
+                data=edge_trace + [node_trace],
+                layout=go.Layout(
+                    title="User Network (Click & Drag to Explore)",
+                    showlegend=False,
+                    hovermode='closest',
+                    margin=dict(b=20, l=5, r=5, t=60),
+                    xaxis=dict(showgrid=False, zeroline=False, showticklabels=False),
+                    yaxis=dict(showgrid=False, zeroline=False, showticklabels=False),
+                    height=600
+                )
+            )
+            st.plotly_chart(fig_net, use_container_width=True)
+            st.markdown("**User Interaction Network**: Visualizes connections between influencers who share similar content, highlighting central figures.")
     except Exception as e:
         st.warning(f"⚠️ Network graph failed: {e}")
+        st.write("Debug: Check if `account_id` and `original_text` exist:")
+        st.write(graph_input_df[['account_id', 'original_text']].head())
 
     # ----------------------------
     # ⚠️ High-Risk Influencers
@@ -887,15 +931,12 @@ with tab3:
     st.markdown("### ⚠️ High-Risk Influencers")
     try:
         if 'sim_df' in locals() and not sim_df.empty:
-            # ✅ Fix: Use 'account_id1' and 'account_id2', not 'influencer1'
             all_influencers = pd.concat([
-                sim_df[['account_id1']].rename(columns={'account_id1': 'Influencer'}),
-                sim_df[['account_id2']].rename(columns={'account_id2': 'Influencer'})
-            ])['Influencer'].dropna().astype(str)
-
+                sim_df[['account_id1']].rename(columns={'account_id1': 'account_id'}),
+                sim_df[['account_id2']].rename(columns={'account_id2': 'account_id'})
+            ])['account_id'].dropna().astype(str)
             influencer_counts = all_influencers.value_counts()
             high_risk = influencer_counts[influencer_counts >= 3]
-
             if not high_risk.empty:
                 fig_hr = px.bar(
                     high_risk,
