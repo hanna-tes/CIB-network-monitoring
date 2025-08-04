@@ -811,12 +811,20 @@ with tab2:
 # ==================== TAB 3: Network & Risk ====================
 with tab3:
     st.subheader("🚨 High-Risk Accounts & Networks")
+    st.markdown("---")
 
+    # ✅ Use filtered_df_global (your actual variable name)
+    risk_df = filtered_df_global.copy()
+
+    # ----------------------------
+    # 🤖 Detected Coordination Clusters
+    # ----------------------------
     try:
-        clustered_df = cached_clustering(filtered_df)
+        clustered_df = cached_clustering(risk_df)
         if 'cluster' not in clustered_df.columns:
             raise ValueError("Clustering did not return 'cluster' column")
         cluster_counts = clustered_df['cluster'].value_counts()
+
         st.markdown("### 🤖 Detected Coordination Clusters")
         fig_clust = px.bar(
             cluster_counts,
@@ -827,13 +835,18 @@ with tab3:
         )
         st.plotly_chart(fig_clust, use_container_width=True)
         st.markdown("**Detected Coordination Clusters**: Groups posts into clusters based on content similarity, revealing coordinated campaigns.")
-        st.dataframe(clustered_df[['Influencer', 'text', 'Timestamp', 'cluster']])
+        st.dataframe(clustered_df[['account_id', 'text', 'Timestamp', 'cluster']])
     except Exception as e:
         st.warning(f"⚠️ Clustering failed: {e}")
 
+    # ----------------------------
+    # 🕸️ User Interaction Network
+    # ----------------------------
     st.markdown("### 🕸️ User Interaction Network")
     try:
-        G, pos, cluster_map = cached_network_graph(clustered_df if 'clustered_df' in locals() else filtered_df)
+        G, pos, cluster_map = cached_network_graph(
+            clustered_df if 'clustered_df' in locals() and not clustered_df.empty else risk_df
+        )
         edge_trace = []
         for edge in G.edges():
             x0, y0 = pos[edge[0]]
@@ -868,16 +881,20 @@ with tab3:
     except Exception as e:
         st.warning(f"⚠️ Network graph failed: {e}")
 
+    # ----------------------------
+    # ⚠️ High-Risk Influencers
+    # ----------------------------
     st.markdown("### ⚠️ High-Risk Influencers")
     try:
         if 'sim_df' in locals() and not sim_df.empty:
-            # Get all influencers from similarity pairs
+            # ✅ Fix: Use 'account_id1' and 'account_id2', not 'influencer1'
             all_influencers = pd.concat([
-                sim_df[['influencer1']].rename(columns={'influencer1': 'Influencer'}),
-                sim_df[['influencer2']].rename(columns={'influencer2': 'Influencer'})
+                sim_df[['account_id1']].rename(columns={'account_id1': 'Influencer'}),
+                sim_df[['account_id2']].rename(columns={'account_id2': 'Influencer'})
             ])['Influencer'].dropna().astype(str)
+
             influencer_counts = all_influencers.value_counts()
-            high_risk = influencer_counts[influencer_counts >= 3]  # At least 3 coordinated shares
+            high_risk = influencer_counts[influencer_counts >= 3]
 
             if not high_risk.empty:
                 fig_hr = px.bar(
@@ -888,7 +905,7 @@ with tab3:
                     color_continuous_scale='Reds'
                 )
                 st.plotly_chart(fig_hr, use_container_width=True)
-                st.markdown("**High-Risk Influencers**: Highlights accounts involved in 3 or more coordinated messages, indicating potential amplification or coordination roles.")
+                st.markdown("**High-Risk Influencers**: Highlights accounts involved in 3 or more coordinated messages, indicating potential amplification roles.")
             else:
                 st.info("No influencers found participating in 3 or more coordinated messages.")
         else:
