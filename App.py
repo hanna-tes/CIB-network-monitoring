@@ -16,32 +16,31 @@ from io import StringIO
 # --- Set Page Config ---
 st.set_page_config(page_title="CIB Dashboard", layout="wide")
 st.title("🕵️ CIB Network Monitoring Dashboard")
-
 # --- Helper Functions ---
 def infer_platform_from_url(url):
-  """Infers the social media or news platform from a given URL."""
-    if pd.isna(url) or not isinstance(url, str) or not url.startswith("http"):
-        return "Unknown"
-    url = url.lower()
-    if "tiktok.com" in url:
-        return "TikTok"
-    elif "facebook.com" in url or "fb.watch" in url:
-        return "Facebook"
-    elif "twitter.com" in url or "x.com" in url:
-        return "X"
-    elif "youtube.com" in url or "youtu.be" in url:
-        return "YouTube"
-    elif "instagram.com" in url:
-        return "Instagram"
-    elif "telegram.me" in url or "t.me" in url:
-        return "Telegram"
-    elif url.startswith("https://") or url.startswith("http://"):
-        media_domains = ["nytimes.com", "bbc.com", "cnn.com", "reuters.com", "theguardian.com", "aljazeera.com", "lemonde.fr", "dw.com"]
-        if any(domain in url for domain in media_domains):
-            return "News/Media"
-        return "Media"
-    else:
-        return "Unknown"
+    """Infers the social media or news platform from a given URL."""
+    if pd.isna(url) or not isinstance(url, str) or not url.startswith("http"):
+        return "Unknown"
+    url = url.lower()
+    if "tiktok.com" in url:
+        return "TikTok"
+    elif "facebook.com" in url or "fb.watch" in url:
+        return "Facebook"
+    elif "twitter.com" in url or "x.com" in url:
+        return "X"
+    elif "youtube.com" in url or "youtu.be" in url:
+        return "YouTube"
+    elif "instagram.com" in url:
+        return "Instagram"
+    elif "telegram.me" in url or "t.me" in url:
+        return "Telegram"
+    elif url.startswith("https://") or url.startswith("http://"):
+        media_domains = ["nytimes.com", "bbc.com", "cnn.com", "reuters.com", "theguardian.com", "aljazeera.com", "lemonde.fr", "dw.com"]
+        if any(domain in url for domain in media_domains):
+            return "News/Media"
+        return "Media"
+    else:
+        return "Unknown"
 
 def extract_original_text(text):
     """
