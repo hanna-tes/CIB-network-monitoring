@@ -11,6 +11,7 @@ from sklearn.cluster import DBSCAN
 from itertools import combinations
 import re
 from io import BytesIO
+from io import StringIO
 
 # --- Set Page Config ---
 st.set_page_config(page_title="CIB Dashboard", layout="wide")
@@ -442,40 +443,38 @@ elif data_source == "Upload CSV Files":
     openmeasure_df_upload = pd.DataFrame()
 
     if uploaded_meltwater:
-       bytes_data = uploaded_meltwater.getvalue()
+       # ✅ Step 1: Get the raw bytes from the uploaded file
+        bytes_data = uploaded_meltwater.getvalue()
     
-    # Extended encoding list for Meltwater
-    encodings = [
-        'utf-8-sig', 'utf-16', 'utf-16le', 'utf-16be',
-        'latin1', 'iso-8859-1', 'cp1252', 'ascii', 'utf-32'
-    ]
-    # Try to decode
-    decoded_content = None
-    detected_enc = None
-    for enc in encodings:
+        # ✅ Step 2: Try to decode with common encodings
+        encodings = ['utf-8-sig', 'utf-16le', 'utf-16be', 'utf-16', 'latin1', 'cp1252']
+        decoded_content = None
+        detected_enc = None
+    
+        for enc in encodings:
+            try:
+                decoded_content = bytes_data.decode(enc)
+                detected_enc = enc
+                st.sidebar.info(f"✅ Meltwater: Decoded using '{enc}'")
+                break
+            except (UnicodeDecodeError, AttributeError) as e:
+                continue
+    
+        if decoded_content is None:
+            st.error("❌ Failed to read Meltwater CSV: Could not decode with any supported encoding.")
+            st.stop()
+    
+        # ✅ Step 3: Detect delimiter (comma or tab)
+        sample_line = decoded_content.strip().splitlines()[0]
+        sep = '\t' if '\t' in sample_line else ','
+    
+        # ✅ Step 4: Read into DataFrame
         try:
-            decoded_content = bytes_data.decode(enc)
-            detected_enc = enc
-            st.sidebar.info(f"✅ Meltwater: Decoded using '{enc}'")
-            break
-        except UnicodeDecodeError:
-            continue
-
-    if decoded_content is None:
-        st.error("❌ Failed to read Meltwater CSV: Could not decode with any supported encoding.")
-        st.stop()
-
-    # Detect delimiter
-    sample_line = decoded_content.strip().splitlines()[0]
-    sep = '\t' if '\t' in sample_line else ','
-
-    # Read CSV
-    try:
-        meltwater_df_upload = pd.read_csv(StringIO(decoded_content), sep=sep, low_memory=False)
-        st.sidebar.success(f"✅ Meltwater: Loaded {len(meltwater_df_upload)} rows (sep='{sep}', enc='{detected_enc}')")
-    except Exception as e:
-        st.error(f"❌ Failed to parse Meltwater CSV after decoding: {e}")
-        st.stop()
+            meltwater_df_upload = pd.read_csv(StringIO(decoded_content), sep=sep, low_memory=False)
+            st.sidebar.success(f"✅ Meltwater: Loaded {len(meltwater_df_upload)} rows (sep='{sep}', enc='{detected_enc}')")
+        except Exception as e:
+            st.error(f"❌ Failed to parse CSV after decoding: {e}")
+            st.stop()
 # Debug
 st.sidebar.markdown("---")
 st.sidebar.markdown(f"**Mode:** `{coordination_mode}`")
