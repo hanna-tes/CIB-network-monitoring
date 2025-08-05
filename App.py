@@ -454,7 +454,7 @@ elif data_source == "Upload CSV Files":
                 try:
                     decoded_content = bytes_data.decode(enc)
                     detected_enc = enc
-                    st.sidebar.info(f"✅ Meltwater: Decoded using '{enc}'")
+                    #st.sidebar.info(f"✅ Meltwater: Decoded using '{enc}'")
                     break
                 except (UnicodeDecodeError, AttributeError):
                     continue
@@ -624,35 +624,47 @@ with tab2:
             matches = repost_df['text'].astype(str).str.contains(pattern, case=False, na=False)
             return matches.sum()
 
-        narrative_summary = sim_df.groupby('shared_narrative').agg(
-            share_count=('similarity', 'count'),
-            influencers_involved=('influencer1', lambda x: ", ".join(x.astype(str).unique()[:5]) + ("..." if len(x.unique()) > 5 else "")),
-            platforms_involved=('platforms_involved', lambda x: ", ".join(sorted(list(set([p.strip() for sublist in x.tolist() for p in sublist.split(',') if p.strip() != ""])))),
-            repost_count=('shared_narrative', lambda x: get_repost_count(x.iloc[0]))
-        ).sort_values(by='share_count', ascending=False).reset_index()
+        # Aggregate narratives
+        try:
+            narrative_summary = sim_df.groupby('shared_narrative').agg(
+                share_count=('similarity', 'count'),
+                influencers_involved=('influencer1', lambda x: ", ".join(x.astype(str).unique()[:5]) + ("..." if len(x.unique()) > 5 else "")),
+                platforms_involved=('platforms_involved', lambda x: ", ".join(
+                    sorted(
+                        list(
+                            set(
+                                p.strip() for sublist in x.tolist() for p in sublist.split(',') if p.strip() != ""
+                            )
+                        )
+                    )
+                )),
+                repost_count=('shared_narrative', lambda x: get_repost_count(x.iloc[0]))
+            ).sort_values(by='share_count', ascending=False).reset_index()
 
-        st.markdown("### 🔝 Top Coordinated Narratives")
-        fig_nar = px.bar(
-            narrative_summary.head(10),
-            x='share_count',
-            y='shared_narrative',
-            orientation='h',
-            title="Top 10 Most Shared Narratives",
-            labels={'shared_narrative': 'Narrative Snippet', 'share_count': 'Copy-Paste Count'},
-            color='repost_count',
-            color_continuous_scale='Blues',
-            hover_data=['repost_count']
-        )
-        st.plotly_chart(fig_nar, use_container_width=True)
-        st.markdown("**Top Coordinated Narratives**: Based on original posts. Bar color shows how many times the narrative was reposted.")
-
-        st.dataframe(narrative_summary)
-        st.markdown("### 🔄 Full Similarity Pairs")
-        display_sim_df = sim_df.copy()
-        display_sim_df['url1'] = display_sim_df['url1'].apply(lambda x: f'<a href="{x}" target="_blank">{x}</a>' if pd.notna(x) and x.strip() != "" else "")
-        display_sim_df['url2'] = display_sim_df['url2'].apply(lambda x: f'<a href="{x}" target="_blank">{x}</a>' if pd.notna(x) and x.strip() != "" else "")
-        st.markdown(display_sim_df.to_html(escape=False), unsafe_allow_html=True)
-        st.markdown("**Full Similarity Pairs**: Shows all pairs of posts with highly similar content, including source and timestamps.")
+            st.markdown("### 🔝 Top Coordinated Narratives")
+            fig_nar = px.bar(
+                narrative_summary.head(10),
+                x='share_count',
+                y='shared_narrative',
+                orientation='h',
+                title="Top 10 Most Shared Narratives",
+                labels={'shared_narrative': 'Narrative Snippet', 'share_count': 'Copy-Paste Count'},
+                color='repost_count',
+                color_continuous_scale='Blues',
+                hover_data=['repost_count']
+            )
+            st.plotly_chart(fig_nar, use_container_width=True)
+            st.dataframe(narrative_summary)
+            st.markdown("### 🔄 Full Similarity Pairs")
+            display_sim_df = sim_df.copy()
+            display_sim_df['url1'] = display_sim_df['url1'].apply(lambda x: f'<a href="{x}" target="_blank">{x}</a>' if pd.notna(x) and x.strip() != "" else "")
+            display_sim_df['url2'] = display_sim_df['url2'].apply(lambda x: f'<a href="{x}" target="_blank">{x}</a>' if pd.notna(x) and x.strip() != "" else "")
+            st.markdown(display_sim_df.to_html(escape=False), unsafe_allow_html=True)
+            st.markdown("**Full Similarity Pairs**: Shows all pairs of posts with highly similar content, including source and timestamps.")
+        except Exception as e:
+            st.error(f"❌ Failed to generate narrative summary: {e}")
+            st.write("Debug: Check column names in `sim_df`: ")
+            st.write(list(sim_df.columns))
     else:
         st.info("No significant similarities found among original posts.")
 
