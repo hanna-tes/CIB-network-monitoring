@@ -442,14 +442,13 @@ elif data_source == "Upload CSV Files":
     openmeasure_df_upload = pd.DataFrame()
 
     if uploaded_meltwater:
-    bytes_data = uploaded_meltwater.getvalue()
+       bytes_data = uploaded_meltwater.getvalue()
     
     # Extended encoding list for Meltwater
     encodings = [
         'utf-8-sig', 'utf-16', 'utf-16le', 'utf-16be',
         'latin1', 'iso-8859-1', 'cp1252', 'ascii', 'utf-32'
     ]
-    
     # Try to decode
     decoded_content = None
     detected_enc = None
