@@ -19,7 +19,7 @@ st.title("🕵️ CIB Network Monitoring Dashboard")
 
 # --- Helper Functions ---
 def infer_platform_from_url(url):
-    """Infers the social media or news platform from a given URL."""
+  """Infers the social media or news platform from a given URL."""
     if pd.isna(url) or not isinstance(url, str) or not url.startswith("http"):
         return "Unknown"
     url = url.lower()
