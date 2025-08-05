@@ -442,39 +442,62 @@ elif data_source == "Upload CSV Files":
     civicsignals_df_upload = pd.DataFrame()
     openmeasure_df_upload = pd.DataFrame()
 
-    if uploaded_meltwater:
-       # ✅ Step 1: Get the raw bytes from the uploaded file
-        bytes_data = uploaded_meltwater.getvalue()
-    
-        # ✅ Step 2: Try to decode with common encodings
+    def read_uploaded_file(uploaded_file, file_name):
+        if not uploaded_file:
+            return pd.DataFrame()
+        
+        bytes_data = uploaded_file.getvalue()
         encodings = ['utf-8-sig', 'utf-16le', 'utf-16be', 'utf-16', 'latin1', 'cp1252']
         decoded_content = None
         detected_enc = None
-    
+
         for enc in encodings:
             try:
                 decoded_content = bytes_data.decode(enc)
                 detected_enc = enc
-                st.sidebar.info(f"✅ Meltwater: Decoded using '{enc}'")
+                st.sidebar.info(f"✅ {file_name}: Decoded using '{enc}'")
                 break
-            except (UnicodeDecodeError, AttributeError) as e:
+            except (UnicodeDecodeError, AttributeError):
                 continue
-    
+        
         if decoded_content is None:
-            st.error("❌ Failed to read Meltwater CSV: Could not decode with any supported encoding.")
-            st.stop()
-    
-        # ✅ Step 3: Detect delimiter (comma or tab)
+            st.error(f"❌ Failed to read {file_name} CSV: Could not decode with any supported encoding.")
+            return pd.DataFrame()
+
         sample_line = decoded_content.strip().splitlines()[0]
         sep = '\t' if '\t' in sample_line else ','
-    
-        # ✅ Step 4: Read into DataFrame
+        
         try:
-            meltwater_df_upload = pd.read_csv(StringIO(decoded_content), sep=sep, low_memory=False)
-            st.sidebar.success(f"✅ Meltwater: Loaded {len(meltwater_df_upload)} rows (sep='{sep}', enc='{detected_enc}')")
+            df = pd.read_csv(StringIO(decoded_content), sep=sep, low_memory=False)
+            st.sidebar.success(f"✅ {file_name}: Loaded {len(df)} rows (sep='{sep}', enc='{detected_enc}')")
+            return df
         except Exception as e:
-            st.error(f"❌ Failed to parse CSV after decoding: {e}")
-            st.stop()
+            st.error(f"❌ Failed to parse {file_name} CSV after decoding: {e}")
+            return pd.DataFrame()
+
+    meltwater_df_upload = read_uploaded_file(uploaded_meltwater, "Meltwater")
+    civicsignals_df_upload = read_uploaded_file(uploaded_civicsignals, "CivicSignals")
+    openmeasure_df_upload = read_uploaded_file(uploaded_openmeasure, "Open-Measure")
+    
+    with st.spinner("📥 Combining uploaded datasets..."):
+        obj_map = {
+            "meltwater": "hit sentence" if coordination_mode == "Text Content" else "url",
+            "civicsignals": "title" if coordination_mode == "Text Content" else "url",
+            "openmeasure": "text" if coordination_mode == "Text Content" else "url"
+        }
+        combined_raw_df = combine_social_media_data(
+            meltwater_df_upload,
+            civicsignals_df_upload,
+            openmeasure_df_upload,
+            meltwater_object_col=obj_map["meltwater"],
+            civicsignals_object_col=obj_map["civicsignals"],
+            openmeasure_object_col=obj_map["openmeasure"]
+        )
+
+    if combined_raw_df.empty:
+        st.warning("No data loaded from uploaded files.")
+        st.stop()
+    st.sidebar.success(f"✅ Combined {len(combined_raw_df)} posts from uploaded datasets.")
 # Debug
 st.sidebar.markdown("---")
 st.sidebar.markdown(f"**Mode:** `{coordination_mode}`")
