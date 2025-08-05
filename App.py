@@ -436,51 +436,46 @@ elif data_source == "Upload CSV Files":
     uploaded_civicsignals = st.sidebar.file_uploader("Upload CivicSignals CSV", type=["csv"], key="civicsignals_upload")
     uploaded_openmeasure = st.sidebar.file_uploader("Upload Open-Measure CSV", type=["csv"], key="openmeasure_upload")
 
-    meltwater_df_upload = pd.DataFrame()
-    civicsignals_df_upload = pd.DataFrame()
-    openmeasure_df_upload = pd.DataFrame()
-
     # Handle file uploads
     meltwater_df_upload = pd.DataFrame()
     civicsignals_df_upload = pd.DataFrame()
     openmeasure_df_upload = pd.DataFrame()
 
     if uploaded_meltwater:
-        bytes_data = uploaded_meltwater.getvalue()
-        # Try common encodings for Meltwater
-        encodings = ['utf-8-sig', 'utf-16', 'latin1', 'iso-8859-1', 'cp1252']
-        success = False
-        for enc in encodings:
-            try:
-                meltwater_df_upload = pd.read_csv(BytesIO(bytes_data), sep=',', encoding=enc, low_memory=False)
-                st.sidebar.success(f"✅ Meltwater: Loaded {len(meltwater_df_upload)} rows (decoded with {enc})")
-                success = True
-                break
-            except Exception:
-                continue
-        if not success:
-            st.error("❌ Failed to read Meltwater CSV: Could not decode with UTF-8, UTF-16, or Latin-1.")
-            st.stop()
+    bytes_data = uploaded_meltwater.getvalue()
     
-    if uploaded_civicsignals:
+    # Extended encoding list for Meltwater
+    encodings = [
+        'utf-8-sig', 'UTF-16', 'utf-16le', 'utf-16be',
+        'latin1', 'iso-8859-1', 'cp1252', 'ascii', 'utf-32'
+    ]
+    
+    # Try to decode
+    decoded_content = None
+    detected_enc = None
+    for enc in encodings:
         try:
-            civicsignals_df_upload = pd.read_csv(uploaded_civicsignals, sep=',')
-            st.sidebar.success(f"✅ CivicSignal: Loaded {len(civicsignals_df_upload)} rows")
-        except Exception as e:
-            st.error(f"❌ Failed to read CivicSignals CSV: {e}")
-            st.stop()
-    
-    if uploaded_openmeasure:
-        try:
-            openmeasure_df_upload = pd.read_csv(uploaded_openmeasure, sep=',', low_memory=False)
-            st.sidebar.success(f"✅ Open-Measure: Loaded {len(openmeasure_df_upload)} rows")
-        except Exception as e:
-            st.error(f"❌ Failed to read Open-Measure CSV: {e}")
-            st.stop()
-    
-    # Check if at least one dataset was uploaded
-    if meltwater_df_upload.empty and civicsignals_df_upload.empty and openmeasure_df_upload.empty:
-        st.warning("Please upload at least one CSV file to proceed.")
+            decoded_content = bytes_data.decode(enc)
+            detected_enc = enc
+            st.sidebar.info(f"✅ Meltwater: Decoded using '{enc}'")
+            break
+        except UnicodeDecodeError:
+            continue
+
+    if decoded_content is None:
+        st.error("❌ Failed to read Meltwater CSV: Could not decode with any supported encoding.")
+        st.stop()
+
+    # Detect delimiter
+    sample_line = decoded_content.strip().splitlines()[0]
+    sep = '\t' if '\t' in sample_line else ','
+
+    # Read CSV
+    try:
+        meltwater_df_upload = pd.read_csv(StringIO(decoded_content), sep=sep, low_memory=False)
+        st.sidebar.success(f"✅ Meltwater: Loaded {len(meltwater_df_upload)} rows (sep='{sep}', enc='{detected_enc}')")
+    except Exception as e:
+        st.error(f"❌ Failed to parse Meltwater CSV after decoding: {e}")
         st.stop()
 # Debug
 st.sidebar.markdown("---")
