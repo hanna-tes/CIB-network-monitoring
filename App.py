@@ -446,7 +446,7 @@ elif data_source == "Upload CSV Files":
     
     # Extended encoding list for Meltwater
     encodings = [
-        'utf-8-sig', 'UTF-16', 'utf-16le', 'utf-16be',
+        'utf-8-sig', 'utf-16', 'utf-16le', 'utf-16be',
         'latin1', 'iso-8859-1', 'cp1252', 'ascii', 'utf-32'
     ]
     
