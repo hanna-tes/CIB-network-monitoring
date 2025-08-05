@@ -833,10 +833,21 @@ with tab3:
     - **Node Size:** Larger nodes indicate more connections, suggesting a more central or influential account within a coordinated group.
     """)
     
+    # ------------------ ADDED CODE FOR PERFORMANCE IMPROVEMENT ------------------
+    MAX_NETWORK_NODES = st.slider(
+        "Max nodes to display in network graph (for performance)",
+        10, 500, 100,
+        key="max_network_nodes"
+    )
+    
     if coordination_mode == "Text Content":
         if 'clustered_df' in locals() and not clustered_df.empty:
+            # Filter the top N nodes by post count to avoid heavy load
+            top_accounts = clustered_df['account_id'].value_counts().head(MAX_NETWORK_NODES).index
+            filtered_df_for_graph = clustered_df[clustered_df['account_id'].isin(top_accounts)]
+
             # Pass data_source to the cached function
-            G, pos, cluster_map = cached_network_graph(clustered_df, "text", data_source=data_source)
+            G, pos, cluster_map = cached_network_graph(filtered_df_for_graph, "text", data_source=data_source)
             st.info(f"👥 Graph has {G.number_of_nodes()} nodes and {G.number_of_edges()} edges.")
             
             if G.number_of_nodes() > 0:
@@ -914,8 +925,12 @@ with tab3:
                 st.info("Not enough data to build a network graph.")
     
     elif coordination_mode == "Shared URLs":
+        # Filter the top N nodes by post count to avoid heavy load
+        top_accounts = filtered_df_global['account_id'].value_counts().head(MAX_NETWORK_NODES).index
+        filtered_df_for_graph = filtered_df_global[filtered_df_global['account_id'].isin(top_accounts)]
+
         # Pass data_source to the cached function
-        G, pos, cluster_map = cached_network_graph(filtered_df_global, "url", data_source=data_source)
+        G, pos, cluster_map = cached_network_graph(filtered_df_for_graph, "url", data_source=data_source)
         st.info(f"👥 Graph has {G.number_of_nodes()} nodes and {G.number_of_edges()} edges.")
         
         if G.number_of_nodes() > 0:
