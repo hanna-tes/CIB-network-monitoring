@@ -353,7 +353,7 @@ def cached_network_graph(_df_for_graph, coordination_type="text", data_source="d
 st.sidebar.header("📥 Data Source")
 data_source_option = st.sidebar.radio(
     "Choose data source:",
-    ("Use Default Datasets", "Upload Social Media CSVs", "Upload Radar Leads CSV")
+    ("Use Default Datasets", "Upload Social Media CSVs")  # REMOVED: "Upload Radar Leads CSV"
 )
 
 # Coordination Mode Selector
@@ -409,7 +409,7 @@ def read_uploaded_file(uploaded_file, file_name):
         st.error(f"❌ Failed to parse {file_name} CSV after decoding: {e}")
         return pd.DataFrame()
 
-# --- Load data based on sidebar selection ---
+# Load data based on sidebar selection
 if data_source_option == "Use Default Datasets":
     st.sidebar.info("Using default datasets from GitHub.")
     with st.spinner("📥 Loading and combining default datasets..."):
@@ -469,6 +469,7 @@ elif data_source_option == "Upload Social Media CSVs":
             openmeasure_object_col=obj_map["openmeasure"]
         )
         data_source_type = "uploaded_social"
+
 # Exit if no data
 if combined_raw_df is None or combined_raw_df.empty:
     st.warning("No data available. Please upload a CSV file or check the default datasets.")
@@ -553,88 +554,49 @@ tab1, tab2, tab3 = st.tabs([
     "🔍 Analysis",
     "🌐 Network & Risk",
 ])
+
 # ==================== TAB 1: Overview ====================
 with tab1:
     st.subheader("📌 Summary Statistics")
-    if filtered_df_global.empty:
-        st.info("No data available to display summary statistics.")
-    else:
-        # Top 10 Influencers
+    if not filtered_df_global.empty:
         if 'Influencer' in filtered_df_global.columns:
             top_influencers = filtered_df_global['Influencer'].value_counts().head(10)
-            if len(top_influencers) > 0:
-                fig_src = px.bar(
-                    top_influencers,
-                    title="Top 10 Influencers",
-                    labels={'value': 'Posts', 'index': 'Influencer'}
-                )
-                st.plotly_chart(fig_src, use_container_width=True)
-            else:
-                st.info("No influencer data to display.")
+            fig_src = px.bar(top_influencers, title="Top 10 Influencers", labels={'value': 'Posts', 'index': 'Influencer'})
+            st.plotly_chart(fig_src, use_container_width=True)
         else:
             st.info("No 'Influencer' column found.")
 
-        # Top 10 Platforms
-        if 'Platform' in filtered_df_global.columns:
-            platform_counts = filtered_df_global['Platform'].value_counts().head(10)
-            if len(platform_counts) > 0:
-                fig_platform = px.bar(
-                    platform_counts,
-                    title="Top 10 Platforms",
-                    labels={'value': 'Posts', 'index': 'Platform'}
-                )
-                st.plotly_chart(fig_platform, use_container_width=True)
-            else:
-                st.info("No platform data to display.")
+        if 'Platform' in filtered_df_global.columns and not filtered_df_global['Platform'].empty:
+            top_platforms = filtered_df_global['Platform'].value_counts().head(10)
+            fig_platform = px.bar(top_platforms, title="Top 10 Platforms", labels={'value': 'Posts', 'index': 'Platform'})
+            st.plotly_chart(fig_platform, use_container_width=True)
         else:
-            st.info("No 'Platform' column found.")
+            st.info("No 'Platform' column found or no data for platforms.")
 
-        # Top 10 Channels
         if 'Channel' in filtered_df_global.columns:
-            channel_counts = filtered_df_global['Channel'].value_counts().dropna().head(10)
-            if len(channel_counts) > 0:
-                fig_chan = px.bar(
-                    channel_counts,
-                    title="Top 10 Channels",
-                    labels={'value': 'Posts', 'index': 'Channel'}
-                )
-                st.plotly_chart(fig_chan, use_container_width=True)
-            else:
-               # st.info("No channel data to display.")
-        # No else: silently skip if column doesn't exist (per your request)
+            top_channels = filtered_df_global['Channel'].value_counts().head(10)
+            fig_chan = px.bar(top_channels, title="Top 10 Channels", labels={'value': 'Posts', 'index': 'Channel'})
+            st.plotly_chart(fig_chan, use_container_width=True)
 
-        # Top 10 Hashtags
-        if 'text' in filtered_df_global.columns:
-            text_data = filtered_df_global['text'].astype(str)
-            hashtags_series = text_data.str.findall(r'#\w+').apply(lambda x: [tag.lower() for tag in x])
-            all_hashtags = [tag for tags_list in hashtags_series if isinstance(tags_list, list) for tag in tags_list]
+        if 'text' in filtered_df_global.columns and not filtered_df_global['text'].empty:
+            filtered_df_temp = filtered_df_global.copy()
+            filtered_df_temp['hashtags'] = filtered_df_temp['text'].astype(str).str.findall(r'#\w+').apply(lambda x: [tag.lower() for tag in x])
+            all_hashtags = [tag for tags_list in filtered_df_temp['hashtags'] if isinstance(tags_list, list) for tag in tags_list if tags_list]
             if all_hashtags:
                 hashtag_counts = pd.Series(all_hashtags).value_counts().head(10)
-                fig_ht = px.bar(
-                    hashtag_counts,
-                    title="Top 10 Hashtags",
-                    labels={'value': 'Frequency', 'index': 'Hashtag'}
-                )
+                fig_ht = px.bar(hashtag_counts, title="Top 10 Hashtags", labels={'value': 'Frequency', 'index': 'Hashtag'})
                 st.plotly_chart(fig_ht, use_container_width=True)
             else:
-                st.info("No hashtags found in the 'text' column.")
-        # No else: silently skip if no 'text' column
-
-        # Daily Post Volume
-        if 'Timestamp' in filtered_df_global.columns and pd.api.types.is_datetime64_any_dtype(filtered_df_global['Timestamp']):
-            time_series = filtered_df_global.set_index('Timestamp').resample('D').size()
-            if len(time_series) > 0:
-                fig_ts = px.area(
-                    time_series,
-                    title="Daily Post Volume",
-                    labels={'value': 'Number of Posts', 'Timestamp': 'Date'}
-                )
-                st.plotly_chart(fig_ts, use_container_width=True)
-            else:
-                st.info("No timestamp data to display daily volume.")
+                st.info("No hashtags found in the filtered data 'text' column.")
         else:
-            st.info("No valid timestamp data for time series.")
-            
+            st.info("No 'text' column found or it's empty to extract hashtags.")
+
+        time_series = filtered_df_global.set_index('Timestamp').resample('D').size()
+        fig_ts = px.area(time_series, title="Daily Post Volume", labels={'value': 'Number of Posts', 'Timestamp': 'Date'})
+        st.plotly_chart(fig_ts, use_container_width=True)
+    else:
+        st.info("No data available to display summary statistics.")
+
 # ==================== TAB 2: Similarity & Coordination ====================
 with tab2:
     st.header("🔍 Analysis")
@@ -674,221 +636,223 @@ with tab2:
 with tab3:
     st.header("🌐 Network & Risk")
     st.markdown("""
-        This section identifies high-risk coordination networks by analyzing shared content or URLs.
-        Only significant clusters and influential nodes are displayed to ensure clarity and relevance.
+        This section provides an in-depth look at the network of user interactions and identifies potential risks. 
+        You can analyze coordination based on shared text content or shared URLs to visualize how users are connected.
     """)
-
     st.subheader("🚨 High-Risk Accounts & Networks")
-
-    # === Clustering Analysis (Text Content) or URL Sharing ===
+    
     if coordination_mode == "Text Content":
-        if 'original_text' not in filtered_df_global.columns:
-            st.info("No text data available for clustering.")
+        df_for_clustering = filtered_df_global[filtered_df_global['text'].astype(str).str.strip() != ""].copy()
+        if df_for_clustering.empty:
+            st.info("No valid text data for clustering analysis.")
+            clustered_df = pd.DataFrame()
         else:
-            df_for_clustering = filtered_df_global[filtered_df_global['original_text'].str.strip() != ""].copy()
-            if df_for_clustering.empty:
-                st.info("No valid text data for clustering after filtering.")
+            clustered_df = cached_clustering(df_for_clustering, data_source=data_source_type)
+        
+        if 'cluster' not in clustered_df.columns:
+            st.warning("⚠️ Clustering did not return 'cluster' column. Displaying unclustered data.")
+            clustered_df['cluster'] = "N/A"
+        
+        if not clustered_df.empty:
+            cluster_counts = clustered_df['cluster'].value_counts()
+            if not cluster_counts.empty:
+                st.markdown("### 🤖 Detected Coordination Clusters")
+                fig_clust = px.bar(
+                    cluster_counts, title="Cluster Sizes", labels={'value': 'Member Count', 'index': 'Cluster ID'},
+                    color=cluster_counts.index.astype(str), color_discrete_sequence=px.colors.qualitative.Set3
+                )
+                st.plotly_chart(fig_clust, use_container_width=True)
+                st.dataframe(clustered_df[['Influencer', 'text', 'Timestamp', 'cluster']])
             else:
-                clustered_df = cached_clustering(df_for_clustering, data_source=data_source_type)
-                if 'cluster' not in clustered_df.columns:
-                    st.info("Clustering failed or no clusters found.")
-                else:
-                    # Focus only on meaningful clusters (size >= 2, not noise)
-                    cluster_counts = clustered_df['cluster'].value_counts()
-                    meaningful_clusters = cluster_counts[(cluster_counts.index != -1) & (cluster_counts >= 2)]
-                    
-                    if meaningful_clusters.empty:
-                        st.info("No significant coordination clusters detected (min. 2 members).")
-                    else:
-                        st.markdown("### 🤖 Significant Coordination Clusters")
-                        fig_clust = px.bar(
-                            meaningful_clusters,
-                            title=f"{len(meaningful_clusters)} Clusters with ≥2 Members",
-                            labels={'value': 'Member Count', 'index': 'Cluster ID'},
-                            color=meaningful_clusters.index.astype(str),
-                            color_discrete_sequence=px.colors.qualitative.Bold,
-                        )
-                        fig_clust.update_layout(
-                            height=300,
-                            margin=dict(l=20, r=20, t=40, b=40),
-                            showlegend=False,
-                            xaxis={'tickmode': 'linear'} if len(meaningful_clusters) < 10 else {}
-                        )
-                        st.plotly_chart(fig_clust, use_container_width=True)
-
-                        # Show only top 5 clusters
-                        top_clusters = meaningful_clusters.head(5).index
-                        st.dataframe(
-                            clustered_df[clustered_df['cluster'].isin(top_clusters)][
-                                ['Influencer', 'text', 'Timestamp', 'cluster']
-                            ].reset_index(drop=True),
-                            height=250
-                        )
+                st.info("No clusters detected or no data available for clustering.")
+        else:
+            st.info("No data available for clustering.")
     elif coordination_mode == "Shared URLs":
-        if 'URL' not in filtered_df_global.columns:
-            st.info("No URL data available.")
+        url_groups = filtered_df_global.groupby('URL').filter(lambda x: len(x) > 1)
+        if not url_groups.empty:
+            st.success(f"✅ Found {url_groups['URL'].nunique()} URLs shared by multiple accounts.")
+            st.dataframe(url_groups.groupby('URL').agg(
+                post_count=('Influencer', 'size'),
+                accounts_involved=('Influencer', lambda x: ', '.join(x.unique())),
+                platforms_involved=('Platform', lambda x: ', '.join(x.unique())),
+                first_share=('Timestamp', 'min'),
+                last_share=('Timestamp', 'max')
+            ).sort_values('post_count', ascending=False).reset_index())
         else:
-            url_groups = filtered_df_global[filtered_df_global['URL'].str.strip() != ""]
-            shared_urls = url_groups.groupby('URL').filter(lambda x: len(x) > 1)
-            if shared_urls.empty:
-                st.info("No URLs shared by multiple accounts.")
-            else:
-                st.success(f"🔗 Found **{shared_urls['URL'].nunique()}** URLs shared by ≥2 accounts.")
-                url_summary = shared_urls.groupby('URL').agg(
-                    share_count=('Influencer', 'size'),
-                    unique_accounts=('Influencer', 'nunique'),
-                    platforms=('Platform', lambda x: ', '.join(x.unique())),
-                    first_seen=('Timestamp', 'min'),
-                    last_seen=('Timestamp', 'max')
-                ).sort_values('share_count', ascending=False).head(10)
-                st.dataframe(url_summary)
-
-    # ==================== IMPROVED NETWORK GRAPH ====================
-    st.markdown("### 🕸️ Key Coordination Network")
-
-    # Limit nodes for clarity and performance
-    MAX_NODES = st.slider(
-        "Max influential nodes to display",
-        min_value=10, max_value=200, value=50,
-        help="Limits graph to top accounts by interaction frequency for clarity."
+            st.info("No URLs were shared by more than one account in the filtered dataset.")
+    
+    st.markdown("### 🕸️ Coordinated Network Graph")
+    MAX_NETWORK_NODES = st.slider(
+        "Max nodes to display in network graph (for performance)",
+        10, 500, 100, key="max_network_nodes"
     )
-
-    # Build graph only if we have data
-    G = nx.Graph()
-    filtered_df_for_graph = filtered_df_global.copy()
-
-    if coordination_mode == "Text Content" and 'clustered_df' in locals():
-        # Use only top influencers from significant clusters
-        top_accounts = clustered_df['Influencer'].value_counts().head(MAX_NODES).index
-        filtered_df_for_graph = clustered_df[clustered_df['Influencer'].isin(top_accounts)]
-        G, pos, cluster_map = cached_network_graph(filtered_df_for_graph, "text", data_source=data_source_type)
+    if coordination_mode == "Text Content":
+        if 'clustered_df' in locals() and not clustered_df.empty:
+            top_accounts = clustered_df['Influencer'].value_counts().head(MAX_NETWORK_NODES).index
+            filtered_df_for_graph = clustered_df[clustered_df['Influencer'].isin(top_accounts)].copy()
+            G, pos, cluster_map = cached_network_graph(filtered_df_for_graph, "text", data_source=data_source_type)
+            st.info(f"👥 Graph has {G.number_of_nodes()} nodes and {G.number_of_edges()} edges.")
+            if G.number_of_nodes() > 0:
+                edge_x = []
+                edge_y = []
+                for edge in G.edges():
+                    x0, y0 = pos[edge[0]]
+                    x1, y1 = pos[edge[1]]
+                    edge_x.append(x0)
+                    edge_x.append(x1)
+                    edge_x.append(None)
+                    edge_y.append(y0)
+                    edge_y.append(y1)
+                    edge_y.append(None)
+                edge_trace = go.Scatter(
+                    x=edge_x, y=edge_y,
+                    line=dict(width=0.5, color='#888'),
+                    hoverinfo='none',
+                    mode='lines'
+                )
+                node_x = []
+                node_y = []
+                for node in G.nodes():
+                    x, y = pos[node]
+                    node_x.append(x)
+                    node_y.append(y)
+                node_trace = go.Scatter(
+                    x=node_x, y=node_y,
+                    mode='markers+text',
+                    text=list(G.nodes()),
+                    textposition="top center",
+                    hoverinfo='text',
+                    marker=dict(
+                        showscale=True,
+                        colorscale='YlGnBu',
+                        reversescale=True,
+                        color=[cluster_map.get(n, -2) for n in G.nodes()],
+                        size=10,
+                        colorbar=dict(
+                            thickness=15,
+                            title='Cluster ID',
+                            xanchor='left',
+                            titleside='right'
+                        ),
+                        line_width=2
+                    )
+                )
+                node_adjacencies = []
+                node_text = []
+                for node, adjacencies in enumerate(G.adjacency()):
+                    node_adjacencies.append(len(adjacencies[1]))
+                    node_text.append(f"User: {adjacencies[0]}<br># of connections: {len(adjacencies[1])}<br>Platform: {G.nodes[adjacencies[0]].get('platform', 'Unknown')}<br>Cluster: {G.nodes[adjacencies[0]].get('cluster', 'N/A')}")
+                node_trace.marker.color = [cluster_map.get(n, -2) for n in G.nodes()]
+                node_weights = dict(G.degree(weight='weight'))
+                node_trace.marker.size = [node_weights[n] * 2 + 5 for n in G.nodes()]
+                node_trace.text = node_text
+                fig = go.Figure(data=[edge_trace, node_trace],
+                    layout=go.Layout(
+                        title='<br>Text Coordination Network Graph',
+                        titlefont_size=16,
+                        showlegend=False,
+                        hovermode='closest',
+                        margin=dict(b=20,l=5,r=5,t=40),
+                        annotations=[ dict(showarrow=False, xref="paper", yref="paper", x=0.005, y=-0.002 ) ],
+                        xaxis=dict(showgrid=False, zeroline=False, showticklabels=False),
+                        yaxis=dict(showgrid=False, zeroline=False, showticklabels=False))
+                )
+                st.plotly_chart(fig, use_container_width=True)
+            else:
+                st.info("Not enough data to build a network graph.")
     elif coordination_mode == "Shared URLs":
-        top_accounts = filtered_df_global['Influencer'].value_counts().head(MAX_NODES).index
-        filtered_df_for_graph = filtered_df_global[filtered_df_global['Influencer'].isin(top_accounts)]
+        top_accounts = filtered_df_global['Influencer'].value_counts().head(MAX_NETWORK_NODES).index
+        filtered_df_for_graph = filtered_df_global[filtered_df_global['Influencer'].isin(top_accounts)].copy()
         G, pos, cluster_map = cached_network_graph(filtered_df_for_graph, "url", data_source=data_source_type)
-    else:
-        st.info("No data available for network graph.")
-        G = nx.Graph()
-
-    if G.number_of_nodes() == 0:
-        st.info("No network connections to display.")
-    else:
-        # Remove isolated nodes
-        G.remove_nodes_from(list(nx.isolates(G)))
-        if G.number_of_nodes() == 0:
-            st.info("No connected nodes after filtering isolates.")
-        else:
-            # Recompute layout
-            pos = nx.spring_layout(G, seed=42, k=0.5, iterations=100)
-
-            # Node size by interaction strength (weighted degree)
-            node_weights = dict(G.degree(weight='weight'))
-            min_size, max_size = 15, 50
-            sizes = [
-                min_size + (node_weights[n] - min(node_weights.values())) /
-                (max(node_weights.values()) - min(node_weights.values()) + 1e-6) * (max_size - min_size)
-                for n in G.nodes()
-            ]
-
-            # Colors by cluster
-            colors = [cluster_map.get(n, -2) for n in G.nodes()]
-
-            # Edge traces
-            edge_x, edge_y = [], []
-            for u, v in G.edges():
-                x0, y0 = pos[u]
-                x1, y1 = pos[v]
-                edge_x += [x0, x1, None]
-                edge_y += [y0, y1, None]
+        st.info(f"👥 Graph has {G.number_of_nodes()} nodes and {G.number_of_edges()} edges.")
+        if G.number_of_nodes() > 0:
+            edge_x = []
+            edge_y = []
+            for edge in G.edges():
+                x0, y0 = pos[edge[0]]
+                x1, y1 = pos[edge[1]]
+                edge_x.append(x0)
+                edge_x.append(x1)
+                edge_x.append(None)
+                edge_y.append(y0)
+                edge_y.append(y1)
+                edge_y.append(None)
             edge_trace = go.Scatter(
                 x=edge_x, y=edge_y,
-                mode='lines',
-                line=dict(width=0.8, color='#aaa'),
+                line=dict(width=0.5, color='#888'),
                 hoverinfo='none',
-                showlegend=False
+                mode='lines'
             )
-
-            # Node positions
-            node_x = [pos[node][0] for node in G.nodes()]
-            node_y = [pos[node][1] for node in G.nodes()]
-
-            # Hover text
-            node_text = [
-                f"<b>{node}</b><br>"
-                f"Connections: {G.degree(node)}<br>"
-                f"Platform: {G.nodes[node].get('platform', 'Unknown')}<br>"
-                f"Cluster: {G.nodes[node].get('cluster', 'N/A')}"
-                for node in G.nodes()
-            ]
-
-            # Truncate labels to avoid overlap
-            node_labels = [n if len(n) <= 12 else n[:10] + "..." for n in G.nodes()]
-
+            node_x = []
+            node_y = []
+            for node in G.nodes():
+                x, y = pos[node]
+                node_x.append(x)
+                node_y.append(y)
             node_trace = go.Scatter(
-                x=node_x,
-                y=node_y,
+                x=node_x, y=node_y,
                 mode='markers+text',
-                text=node_labels,
+                text=list(G.nodes()),
                 textposition="top center",
-                textfont=dict(size=10, color='black'),  # Black for readability
                 hoverinfo='text',
-                hovertext=node_text,
                 marker=dict(
-                    size=sizes,
-                    color=colors,
-                    colorscale='Plasma',
                     showscale=True,
+                    colorscale='YlGnBu',
+                    reversescale=True,
+                    color=[cluster_map.get(n, -2) for n in G.nodes()],
+                    size=10,
                     colorbar=dict(
-                        title="Cluster ID",
-                        thickness=10,
-                        x=1.0,
-                        len=0.5
+                        thickness=15,
+                        title='Cluster ID',
+                        xanchor='left',
+                        titleside='right'
                     ),
-                    line=dict(width=1.5, color='white')
-                ),
-                showlegend=False
-            )
-
-            fig = go.Figure(
-                data=[edge_trace, node_trace],
-                layout=go.Layout(
-                    title=f"<b>{coordination_mode} Network</b><br><sup>{G.number_of_nodes()} nodes, {G.number_of_edges()} edges</sup>",
-                    titlefont=dict(size=14),
-                    showlegend=False,
-                    hovermode='closest',
-                    margin=dict(l=20, r=20, b=40, t=60),
-                    xaxis=dict(showgrid=False, zeroline=False, showticklabels=False),
-                    yaxis=dict(showgrid=False, zeroline=False, showticklabels=False),
-                    plot_bgcolor='white',
-                    height=500,
-                    width=None
+                    line_width=2
                 )
             )
+            node_adjacencies = []
+            node_text = []
+            for node, adjacencies in enumerate(G.adjacency()):
+                node_adjacencies.append(len(adjacencies[1]))
+                node_text.append(f"User: {adjacencies[0]}<br># of connections: {len(adjacencies[1])}<br>Platform: {G.nodes[adjacencies[0]].get('platform', 'Unknown')}<br>Cluster: {G.nodes[adjacencies[0]].get('cluster', 'N/A')}")
+            node_trace.marker.color = [cluster_map.get(n, -2) for n in G.nodes()]
+            node_weights = dict(G.degree(weight='weight'))
+            node_trace.marker.size = [node_weights[n] * 2 + 5 for n in G.nodes()]
+            node_trace.text = node_text
+            fig = go.Figure(data=[edge_trace, node_trace],
+                layout=go.Layout(
+                    title='<br>URL Coordination Network Graph',
+                    titlefont_size=16,
+                    showlegend=False,
+                    hovermode='closest',
+                    margin=dict(b=20,l=5,r=5,t=40),
+                    annotations=[ dict(showarrow=False, xref="paper", yref="paper", x=0.005, y=-0.002 ) ],
+                    xaxis=dict(showgrid=False, zeroline=False, showticklabels=False),
+                    yaxis=dict(showgrid=False, zeroline=False, showticklabels=False))
+            )
             st.plotly_chart(fig, use_container_width=True)
-
-    # ==================== High-Risk Influencers ====================
+        else:
+            st.info("Not enough data to build a network graph.")
+    
     st.markdown("### ⚠️ High-Risk Influencers")
     try:
         if 'sim_df' in locals() and not sim_df.empty:
             all_influencers = pd.concat([
-                sim_df['account_id1'],
-                sim_df['account_id2']
-            ]).value_counts()
-            high_risk = all_influencers[all_influencers >= 3]
+                sim_df[['account_id1']].rename(columns={'account_id1': 'Influencer'}),
+                sim_df[['account_id2']].rename(columns={'account_id2': 'Influencer'})
+            ])['Influencer'].dropna().astype(str)
+            influencer_counts = all_influencers.value_counts()
+            high_risk = influencer_counts[influencer_counts >= 3]
             if not high_risk.empty:
                 fig_hr = px.bar(
-                    high_risk.head(10),
-                    title="Top Influencers in ≥3 Coordinated Pairs",
-                    labels={'value': 'Coordination Count', 'index': 'Influencer'},
-                    color='value',
-                    color_continuous_scale='Reds'
+                    high_risk, title="Influencers in ≥3 Coordinated Messages",
+                    labels={'value': 'Coordination Instances', 'index': 'Influencer'},
+                    color='value', color_continuous_scale='Reds'
                 )
-                fig_hr.update_layout(height=300, margin=dict(l=20, r=20, t=40, b=40))
                 st.plotly_chart(fig_hr, use_container_width=True)
             else:
-                st.info("No influencer involved in 3+ coordinated messages.")
+                st.info("No influencers found participating in 3 or more coordinated messages.")
         else:
-            st.info("No coordinated narratives detected.")
+            st.info("No coordinated narratives detected to identify high-risk influencers.")
     except Exception as e:
-        st.warning(f"Could not compute risk scores: {e}")
-        
+        st.warning(f"Risk analysis failed: {e}")
