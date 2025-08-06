@@ -55,45 +55,42 @@ def extract_original_text(text):
 
 # --- Robust Timestamp Parser: Returns UNIX Timestamp (Integer) ---
 def parse_timestamp_robust(timestamp):
-    """
-    Converts a timestamp string to a UNIX timestamp (integer seconds since epoch).
-    Returns None if parsing fails.
-    """
-    if pd.isna(timestamp):
-        return None
-    if isinstance(timestamp, (int, float)):
-        if 0 < timestamp < 253402300800: # Valid range: 1970–9999
-            return int(timestamp)
-        else:
-            return None
-
-    # List of common timestamp formats
-    date_formats = [
-        '%Y-%m-%dT%H:%M:%S.%fZ', '%Y-%m-%dT%H:%M:%SZ',
-        '%Y-%m-%d %H:%M:%S.%f', '%Y-%m-%d %H:%M:%S',
-        '%d/%m/%Y %H:%M:%S', '%m/%d/%Y %H:%M:%S',
-        '%b %d, %Y @ %H:%M:%S.%f', '%d-%b-%Y %I:%M%p',
-        '%A, %d %b %Y %H:%M:%S', '%b %d, %I:%M%p', '%d %b %Y %I:%M%p',
-        '%Y-%m-%d', '%m/%d/%Y', '%d %b %Y',
-    ]
-
-    # Try direct parsing
-    try:
-        parsed = pd.to_datetime(timestamp, errors='coerce', utc=True)
-        if pd.notna(parsed):
-            return int(parsed.timestamp())
-    except:
-        pass
-
-    # Try each format
-    for fmt in date_formats:
-        try:
-            parsed = pd.to_datetime(timestamp, format=fmt, errors='coerce', utc=True)
-            if pd.notna(parsed):
-                return int(parsed.timestamp())
-        except (ValueError, TypeError):
-            continue
-    return None
+    """
+    Converts a timestamp string to a UNIX timestamp (integer seconds since epoch).
+    Returns None if parsing fails.
+    """
+    if pd.isna(timestamp):
+        return None
+    if isinstance(timestamp, (int, float)):
+        if 0 < timestamp < 253402300800:  # Valid range: 1970–9999
+            return int(timestamp)
+        else:
+            return None
+    # List of common timestamp formats
+    date_formats = [
+        '%Y-%m-%dT%H:%M:%S.%fZ', '%Y-%m-%dT%H:%M:%SZ',
+        '%Y-%m-%d %H:%M:%S.%f', '%Y-%m-%d %H:%M:%S',
+        '%d/%m/%Y %H:%M:%S', '%m/%d/%Y %H:%M:%S',
+        '%b %d, %Y @ %H:%M:%S.%f', '%d-%b-%Y %I:%M%p',
+        '%A, %d %b %Y %H:%M:%S', '%b %d, %I:%M%p', '%d %b %Y %I:%M%p',
+        '%Y-%m-%d', '%m/%d/%Y', '%d %b %Y',
+    ]
+    # Try direct parsing
+    try:
+        parsed = pd.to_datetime(timestamp, errors='coerce', utc=True)
+        if pd.notna(parsed):
+            return int(parsed.timestamp())
+    except:
+        pass
+    # Try each format
+    for fmt in date_formats:
+        try:
+            parsed = pd.to_datetime(timestamp, format=fmt, errors='coerce', utc=True)
+            if pd.notna(parsed):
+                return int(parsed.timestamp())
+        except (ValueError, TypeError):
+            continue
+    return None
 
 # --- Combine Multiple Datasets with Flexible Object Column ---
 def combine_social_media_data(
