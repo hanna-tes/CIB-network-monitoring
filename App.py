@@ -255,7 +255,7 @@ def build_user_interaction_graph(df, coordination_type="text"):
                     G[u1][u2]['weight'] += 1
                 else:
                     G.add_edge(u1, u2, weight=1)
-    elif coordination_type == "url":
+    elif coordination_mode == "url":
         if 'URL' not in df.columns:
             return G, {}, {}
         url_groups = df.groupby('URL')
@@ -420,6 +420,7 @@ if data_source_option == "Use Default Datasets":
         }
         meltwater_df = pd.DataFrame()
         civicsignals_df = pd.DataFrame()
+        results = []
         for key, url in urls.items():
             try:
                 df = pd.read_csv(url, sep=',')
@@ -428,11 +429,18 @@ if data_source_option == "Use Default Datasets":
                         meltwater_df = df
                     elif key == "civicsignals":
                         civicsignals_df = df
-                    st.sidebar.success(f"✅ {key.capitalize()}: Loaded {len(df)} rows")
+                    results.append({"Source": key.capitalize(), "Rows Loaded": len(df)})
                 else:
-                    st.sidebar.warning(f"⚠️ {key.capitalize()}: Empty file.")
+                    results.append({"Source": key.capitalize(), "Rows Loaded": 0})
             except Exception as e:
-                st.sidebar.warning(f"⚠️ Failed to load {key}: {e}")
+                results.append({"Source": key.capitalize(), "Rows Loaded": "Error"})
+        
+        # Show data overview
+        if results:
+            results_df = pd.DataFrame(results)
+            st.sidebar.markdown("### 📊 Data Overview")
+            st.sidebar.dataframe(results_df, hide_index=True)
+
         obj_map = {
             "meltwater": "hit sentence" if coordination_mode == "Text Content" else "url",
             "civicsignals": "title" if coordination_mode == "Text Content" else "url"
@@ -440,7 +448,7 @@ if data_source_option == "Use Default Datasets":
         combined_raw_df = combine_social_media_data(
             meltwater_df if not meltwater_df.empty else None,
             civicsignals_df if not civicsignals_df.empty else None,
-            None,  # No Open-Measure by default
+            None,
             meltwater_object_col=obj_map["meltwater"],
             civicsignals_object_col=obj_map["civicsignals"]
         )
@@ -451,9 +459,11 @@ elif data_source_option == "Upload Social Media CSVs":
     uploaded_meltwater = st.sidebar.file_uploader("Upload Meltwater CSV", type=["csv"], key="meltwater_upload")
     uploaded_civicsignals = st.sidebar.file_uploader("Upload CivicSignals CSV", type=["csv"], key="civicsignals_upload")
     uploaded_openmeasure = st.sidebar.file_uploader("Upload Open-Measure CSV", type=["csv"], key="openmeasure_upload")
+    
     meltwater_df_upload = read_uploaded_file(uploaded_meltwater, "Meltwater")
     civicsignals_df_upload = read_uploaded_file(uploaded_civicsignals, "CivicSignals")
     openmeasure_df_upload = read_uploaded_file(uploaded_openmeasure, "Open-Measure")
+    
     with st.spinner("📥 Combining uploaded datasets..."):
         obj_map = {
             "meltwater": "hit sentence" if coordination_mode == "Text Content" else "url",
@@ -470,16 +480,27 @@ elif data_source_option == "Upload Social Media CSVs":
         )
         data_source_type = "uploaded_social"
 
+        # Data overview table
+        results = []
+        for name, df in [("Meltwater", meltwater_df_upload), 
+                        ("CivicSignals", civicsignals_df_upload), 
+                        ("Open-Measure", openmeasure_df_upload)]:
+            if df is not None and not df.empty:
+                results.append({"Source": name, "Rows Loaded": len(df)})
+            elif df is not None:
+                results.append({"Source": name, "Rows Loaded": 0})
+            else:
+                results.append({"Source": name, "Rows Loaded": "No File"})
+        
+        if results:
+            results_df = pd.DataFrame(results)
+            st.sidebar.markdown("### 📊 Data Overview")
+            st.sidebar.dataframe(results_df, hide_index=True)
+
 # Exit if no data
 if combined_raw_df is None or combined_raw_df.empty:
     st.warning("No data available. Please upload a CSV file or check the default datasets.")
     st.stop()
-
-# Debug
-st.sidebar.markdown("---")
-st.sidebar.markdown(f"**Mode:** `{coordination_mode}`")
-st.sidebar.markdown(f"**Source:** `{data_source_option}`")
-st.sidebar.markdown(f"**Total Rows After Combine:** `{len(combined_raw_df):,}`")
 
 # --- Final Preprocess ---
 with st.spinner("⏳ Preprocessing and mapping combined data..."):
@@ -488,6 +509,12 @@ with st.spinner("⏳ Preprocessing and mapping combined data..."):
 if df.empty:
     st.error("❌ No valid data after final preprocessing.")
     st.stop()
+
+# === Show Top 10 Data Preview ===
+st.markdown("### 🔍 Preview of Processed Data (Top 10 Rows)")
+preview_cols = ['Influencer', 'text', 'Timestamp', 'URL', 'Platform']
+available_cols = [col for col in preview_cols if col in df.columns]
+st.dataframe(df[available_cols].head(10), height=300)
 
 # --- Download Combined Data ---
 st.sidebar.markdown("### 💾 Download Combined & Preprocessed Data")
@@ -737,15 +764,12 @@ with tab3:
                         line_width=2
                     )
                 )
-                node_adjacencies = []
-                node_text = []
-                for node, adjacencies in enumerate(G.adjacency()):
-                    node_adjacencies.append(len(adjacencies[1]))
-                    node_text.append(f"User: {adjacencies[0]}<br># of connections: {len(adjacencies[1])}<br>Platform: {G.nodes[adjacencies[0]].get('platform', 'Unknown')}<br>Cluster: {G.nodes[adjacencies[0]].get('cluster', 'N/A')}")
-                node_trace.marker.color = [cluster_map.get(n, -2) for n in G.nodes()]
                 node_weights = dict(G.degree(weight='weight'))
                 node_trace.marker.size = [node_weights[n] * 2 + 5 for n in G.nodes()]
-                node_trace.text = node_text
+                node_trace.text = [
+                    f"User: {node}<br># of connections: {len(G.adj[node])}<br>Platform: {G.nodes[node].get('platform', 'Unknown')}<br>Cluster: {G.nodes[node].get('cluster', 'N/A')}"
+                    for node in G.nodes()
+                ]
                 fig = go.Figure(data=[edge_trace, node_trace],
                     layout=go.Layout(
                         title='<br>Text Coordination Network Graph',
@@ -810,15 +834,12 @@ with tab3:
                     line_width=2
                 )
             )
-            node_adjacencies = []
-            node_text = []
-            for node, adjacencies in enumerate(G.adjacency()):
-                node_adjacencies.append(len(adjacencies[1]))
-                node_text.append(f"User: {adjacencies[0]}<br># of connections: {len(adjacencies[1])}<br>Platform: {G.nodes[adjacencies[0]].get('platform', 'Unknown')}<br>Cluster: {G.nodes[adjacencies[0]].get('cluster', 'N/A')}")
-            node_trace.marker.color = [cluster_map.get(n, -2) for n in G.nodes()]
             node_weights = dict(G.degree(weight='weight'))
             node_trace.marker.size = [node_weights[n] * 2 + 5 for n in G.nodes()]
-            node_trace.text = node_text
+            node_trace.text = [
+                f"User: {node}<br># of connections: {len(G.adj[node])}<br>Platform: {G.nodes[node].get('platform', 'Unknown')}<br>Cluster: {G.nodes[node].get('cluster', 'N/A')}"
+                for node in G.nodes()
+            ]
             fig = go.Figure(data=[edge_trace, node_trace],
                 layout=go.Layout(
                     title='<br>URL Coordination Network Graph',
