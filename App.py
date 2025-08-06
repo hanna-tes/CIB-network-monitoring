@@ -600,7 +600,7 @@ with tab1:
                 )
                 st.plotly_chart(fig_chan, use_container_width=True)
             else:
-                st.info("No channel data to display.")
+               # st.info("No channel data to display.")
         # No else: silently skip if column doesn't exist (per your request)
 
         # Top 10 Hashtags
