@@ -43,10 +43,7 @@ def infer_platform_from_url(url):
         return "Unknown"
 
 def extract_original_text(text):
-    """
-    Cleans text by removing RT/QT prefixes, @mentions, URLs, and normalizing spaces.
-    Used for similarity analysis.
-    """
+    """Cleans text by removing RT/QT prefixes, @mentions, URLs, and normalizing spaces. Used for similarity analysis."""
     if pd.isna(text) or not isinstance(text, str):
         return ""
     cleaned = re.sub(r'^(RT|rt|QT|qt)\s+@\w+:\s*', '', text, flags=re.IGNORECASE).strip()
