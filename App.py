@@ -409,7 +409,7 @@ def read_uploaded_file(uploaded_file, file_name):
         st.error(f"❌ Failed to parse {file_name} CSV after decoding: {e}")
         return pd.DataFrame()
 
-# Load data based on sidebar selection
+# --- Load data based on sidebar selection ---
 if data_source_option == "Use Default Datasets":
     st.sidebar.info("Using default datasets from GitHub.")
     with st.spinner("📥 Loading and combining default datasets..."):
@@ -469,35 +469,9 @@ elif data_source_option == "Upload Social Media CSVs":
             openmeasure_object_col=obj_map["openmeasure"]
         )
         data_source_type = "uploaded_social"
-
-elif data_source_option == "Upload Radar Leads CSV":
-    st.sidebar.info("Upload a single CSV file with 'Country', 'Leads', and 'URL' columns.")
-    uploaded_radar_file = st.sidebar.file_uploader("Upload Radar Leads CSV", type=["csv"], key="radar_upload")
-    if uploaded_radar_file:
-        with st.spinner("📥 Loading and processing Radar Leads file..."):
-            radar_df_raw = read_uploaded_file(uploaded_radar_file, "Radar Leads")
-            if not radar_df_raw.empty:
-                radar_df_raw.columns = radar_df_raw.columns.str.lower()
-                required_cols = ['country', 'leads', 'url']
-                if all(col in radar_df_raw.columns for col in required_cols):
-                    combined_raw_df = pd.DataFrame({
-                        'account_id': radar_df_raw['country'].astype(str),
-                        'content_id': radar_df_raw['leads'].astype(str),
-                        'object_id': radar_df_raw['leads'].astype(str),
-                        'original_url': radar_df_raw['url'].astype(str),
-                        'timestamp_share': pd.to_datetime('now', utc=True).timestamp(),
-                        'source_dataset': 'Radar Leads'
-                    })
-                    st.sidebar.success(f"✅ Radar Leads file loaded with {len(combined_raw_df)} rows.")
-                    st.sidebar.warning("⚠️ No Timestamp column found. Using current time as a placeholder.")
-                else:
-                    st.error(f"❌ Radar Leads file is missing required columns. Ensure it has 'Country', 'Leads', and 'URL'.")
-                    combined_raw_df = pd.DataFrame()
-        data_source_type = "uploaded_radar"
-
 # Exit if no data
 if combined_raw_df is None or combined_raw_df.empty:
-    st.warning("No data available. Please upload a CSV file or check the default URL.")
+    st.warning("No data available. Please upload a CSV file or check the default datasets.")
     st.stop()
 
 # Debug
@@ -574,13 +548,11 @@ filtered_csv_data = convert_df_to_csv(filtered_df_global)
 st.sidebar.download_button("Download Filtered Data (All Columns)", filtered_csv_data, "filtered_dashboard_data.csv", "text/csv")
 
 # --- TABS ---
-tab1, tab2, tab3, tab4 = st.tabs([
+tab1, tab2, tab3 = st.tabs([
     "📊 Overview",
     "🔍 Analysis",
     "🌐 Network & Risk",
-    "📰 Narrative Dashboard",
 ])
-
 # ==================== TAB 1: Overview ====================
 with tab1:
     st.subheader("📌 Summary Statistics")
