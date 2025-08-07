@@ -254,6 +254,7 @@ def cluster_texts(df, eps, min_samples, max_features):
 def find_coordinated_groups(df, threshold, max_features):
     """
     Groups highly similar posts into coordination groups for better analysis.
+    Crucially, a group is only considered coordinated if it involves more than one unique account.
     """
     text_col = 'original_text'
     social_media_platforms = {'TikTok', 'Facebook', 'X', 'YouTube', 'Instagram', 'Telegram'}
@@ -311,7 +312,7 @@ def find_coordinated_groups(df, threshold, max_features):
                     # Collect all posts in this connected component
                     group_posts = clean_df.iloc[group_indices].copy()
                     
-                    # --- FIX: Only consider a group coordinated if there are multiple unique accounts ---
+                    # --- CORE LOGIC FOR AMPLIFICATION: Only consider a group coordinated if there are multiple unique accounts ---
                     if len(group_posts['account_id'].unique()) > 1:
                         # Determine a single representative snippet for the group
                         representative_text = group_posts['text'].iloc[0]
@@ -365,6 +366,7 @@ def build_user_interaction_graph(df, coordination_type="text"):
             return G, {}, {}
         grouped = df.groupby('cluster')
         for cluster_id, group in grouped:
+            # Only add edges if the cluster involves more than one unique account
             if cluster_id == -1 or len(group[influencer_column].unique()) < 2:
                 for user in group[influencer_column].dropna().unique():
                     if user not in G:
@@ -384,6 +386,7 @@ def build_user_interaction_graph(df, coordination_type="text"):
         for url_shared, group in url_groups:
             if pd.isna(url_shared) or url_shared.strip() == "":
                 continue
+            # Only add edges if the URL is shared by more than one unique account
             users_sharing_url = group[influencer_column].dropna().unique().tolist()
             if len(users_sharing_url) < 2:
                 for user in users_sharing_url:
@@ -405,6 +408,7 @@ def build_user_interaction_graph(df, coordination_type="text"):
         G.nodes[inf]['platform'] = influencer_platform_map.get(inf, 'Unknown')
         if coordination_type == "text":
             clusters = df[df[influencer_column] == inf]['cluster'].dropna()
+            # Assign cluster if available, otherwise -2 for no coordination
             G.nodes[inf]['cluster'] = clusters.mode()[0] if not clusters.empty else -2
         elif coordination_type == "url":
             shared_urls = df[(df[influencer_column] == inf) & df['URL'].notna() & (df['URL'].str.strip() != '')]['URL'].unique()
@@ -820,8 +824,7 @@ with tab2:
                 st.write(f"**Number of Posts:** {group['num_posts']} | **Number of Unique Accounts:** {group['num_accounts']} | **Max Similarity:** {group['max_similarity_score']}")
                 
                 posts_df = pd.DataFrame(group['posts'])
-                # FIX: Convert the existing 'Timestamp' column to datetime and rename for display.
-                # Avoids creating a duplicate column and then renaming it.
+                # Convert the existing 'Timestamp' column to datetime and rename for display.
                 posts_df['Timestamp'] = pd.to_datetime(posts_df['Timestamp'], unit='s', utc=True)
                 posts_df = posts_df.rename(columns={'account_id': 'Account ID', 'Platform': 'Platform', 'URL': 'URL'})
                 posts_df = posts_df[['Account ID', 'Platform', 'Timestamp', 'URL']]
@@ -839,7 +842,7 @@ with tab2:
                 } for i, g in enumerate(coordinated_groups) for p in g['posts']
             ]
             similar_groups_df = pd.DataFrame(flat_groups)
-            # FIX: Ensure a clean DataFrame before writing to CSV to avoid errors.
+            # Ensure a clean DataFrame before writing to CSV to avoid errors.
             similar_groups_df.rename(columns={
                 'account_id': 'Account ID',
                 'Platform': 'Platform',
@@ -899,9 +902,9 @@ with tab3:
     if coordination_mode == "Text Content":
         df_for_graph = df_for_analysis
         with st.spinner("🗂️ Pre-processing data for network graph..."):
-            df_for_graph = cached_clustering(df_for_graph, eps=eps, min_samples=min_samples, max_features=max_features, data_source=data_source + "_" + coordination_mode)
+            clustered_df_for_graph = cached_clustering(df_for_graph, eps=eps, min_samples=min_samples, max_features=max_features, data_source=data_source + "_" + coordination_mode)
         
-        G_text, pos_text, cluster_map_text = cached_network_graph(df_for_graph, coordination_type="text", data_source=data_source + "_" + coordination_mode)
+        G_text, pos_text, cluster_map_text = cached_network_graph(clustered_df_for_graph, coordination_type="text", data_source=data_source + "_" + coordination_mode)
         G = G_text
         pos = pos_text
         cluster_map = cluster_map_text
@@ -948,14 +951,16 @@ with tab3:
             hover_text = f"User: {node}<br>Platform: {G.nodes[node].get('platform', 'N/A')}"
             node_text.append(hover_text)
             
-            # --- FIX: Check type before calling str methods ---
+            # --- FIX: Ensure numerical color for Plotly markers ---
             cluster_id = cluster_map.get(node)
             if isinstance(cluster_id, str):
-                node_color.append(cluster_id)
+                # Assign a unique numerical ID for string-based clusters (e.g., SharedURL_Group_X)
+                # Use a simple hash or map to an integer for Plotly's colorscale
+                node_color.append(hash(cluster_id) % 100) # Map string to a number for colorscale
             elif cluster_id not in [-1, -2]:
-                node_color.append(f"Cluster {cluster_id}")
+                node_color.append(cluster_id) # Use the numerical cluster ID directly
             else:
-                node_color.append("No Coordination")
+                node_color.append(-1) # Assign a distinct numerical value for 'No Coordination'
 
         # Create a DataFrame for node coloring and size
         nodes_df = pd.DataFrame({
@@ -974,10 +979,10 @@ with tab3:
             hoverinfo='text',
             text=nodes_df['text'],
             marker=dict(
-                showscale=False,
-                colorscale='Viridis',
+                showscale=False, # Set to True if you want a color bar legend
+                colorscale='Viridis', # Use a sequential or qualitative colorscale
                 size=nodes_df['size'] * 3 + 5, # Scale size by degree
-                color=nodes_df['color'],
+                color=nodes_df['color'], # Use the numerical color
                 line_width=2,
                 opacity=0.8
             ),
