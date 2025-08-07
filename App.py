@@ -818,8 +818,10 @@ with tab2:
                 st.write(f"**Number of Posts:** {group['num_posts']} | **Number of Unique Accounts:** {group['num_accounts']} | **Max Similarity:** {group['max_similarity_score']}")
                 
                 posts_df = pd.DataFrame(group['posts'])
-                posts_df['first_timestamp'] = pd.to_datetime(posts_df['Timestamp'], unit='s', utc=True)
-                posts_df = posts_df.rename(columns={'account_id': 'Account ID', 'Platform': 'Platform', 'first_timestamp': 'Timestamp', 'URL': 'URL'})
+                # FIX: Convert the existing 'Timestamp' column to datetime and rename for display.
+                # Avoids creating a duplicate column and then renaming it.
+                posts_df['Timestamp'] = pd.to_datetime(posts_df['Timestamp'], unit='s', utc=True)
+                posts_df = posts_df.rename(columns={'account_id': 'Account ID', 'Platform': 'Platform', 'URL': 'URL'})
                 posts_df = posts_df[['Account ID', 'Platform', 'Timestamp', 'URL']]
                 st.dataframe(posts_df, use_container_width=True)
                 st.markdown("---")
@@ -835,6 +837,13 @@ with tab2:
                 } for i, g in enumerate(coordinated_groups) for p in g['posts']
             ]
             similar_groups_df = pd.DataFrame(flat_groups)
+            # FIX: Ensure a clean DataFrame before writing to CSV to avoid errors.
+            similar_groups_df.rename(columns={
+                'account_id': 'Account ID',
+                'Platform': 'Platform',
+                'Timestamp': 'Timestamp (s)',
+                'URL': 'URL'
+            }, inplace=True)
             similar_groups_csv = convert_df_to_csv(similar_groups_df)
             st.download_button(
                 "Download Coordinated Groups CSV",
