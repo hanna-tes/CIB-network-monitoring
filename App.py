@@ -175,12 +175,14 @@ def final_preprocess_and_map_columns(df, coordination_mode="Text Content"):
     df_processed.rename(columns={'original_url': 'URL'}, inplace=True)
     df_processed['object_id'] = df_processed['object_id'].astype(str).replace('nan', '').fillna('')
     df_processed = df_processed[df_processed['object_id'].str.strip() != ""].copy()
+
     def clean_text_for_display(text):
         if not isinstance(text, str): return ""
         text = re.sub(r'http\S+|www\S+|https\S+', '', text)
         text = re.sub(r"\\n|\\r|\\t", " ", text)
         text = re.sub(r'\s+', ' ', text).strip().lower()
         return text
+
     if coordination_mode == "Text Content":
         df_processed['object_id'] = df_processed['object_id'].apply(clean_text_for_display)
         df_processed = df_processed[df_processed['object_id'].str.len() > 0].reset_index(drop=True)
@@ -188,25 +190,29 @@ def final_preprocess_and_map_columns(df, coordination_mode="Text Content"):
             ~df_processed['object_id'].str.lower().str.startswith('rt @') &
             ~df_processed['object_id'].str.lower().str.startswith('qt @')
         ].reset_index(drop=True)
+
     if coordination_mode == "Text Content":
         df_processed['original_text'] = df_processed['object_id'].apply(extract_original_text)
     elif coordination_mode == "Shared URLs":
         df_processed['original_text'] = df_processed['URL'].astype(str).replace('nan', '').fillna('')
+
     df_processed = df_processed[df_processed['original_text'].str.strip() != ""].reset_index(drop=True)
     df_processed['Platform'] = df_processed['URL'].apply(infer_platform_from_url)
-    # Map to old column names for existing visuals
+
+    # Rename columns for plotting later
     df_processed.rename(columns={'account_id': 'Influencer'}, inplace=True)
-    #df_processed.rename(columns={'object_id': 'text'}, inplace=True)
+    df_processed.rename(columns={'object_id': 'text'}, inplace=True)
     df_processed.rename(columns={'timestamp_share': 'Timestamp'}, inplace=True)
-    
+
+    # Ensure optional columns exist
     if 'Outlet' not in df_processed.columns:
         df_processed['Outlet'] = np.nan
     if 'Channel' not in df_processed.columns:
         df_processed['Channel'] = np.nan
-    
-    # Re-create 'Timestamp' as datetime object
+
+    # Convert Timestamp to datetime (UTC)
     df_processed['Timestamp'] = pd.to_datetime(df_processed['Timestamp'], unit='s', utc=True)
-    
+
     if df_processed.empty:
         st.error("❌ No valid data after final preprocessing.")
         st.stop()
@@ -569,18 +575,19 @@ with tab1:
     st.subheader("📌 Summary Statistics")
     
     # === Show Core Semantic Data Preview ===
-    st.markdown("### 🔬 Core Data Preview (Raw Semantic Columns)")
-    st.markdown(f"**Data Source:** `{data_source_option}` | **Coordination Mode:** `{coordination_mode}` | **Total Rows:** `{len(combined_raw_df):,}`")
-    
-    # Define core columns
-    core_columns = ['account_id', 'content_id', 'object_id', 'timestamp_share']
-    available_core_cols = [col for col in core_columns if col in combined_raw_df.columns]
-    
-    if not combined_raw_df.empty and available_core_cols:
-        # Show top 10 rows of core columns
-        st.dataframe(combined_raw_df[available_core_cols].head(10), height=300)
-    else:
-        st.info("No core data available to display (account_id, content_id, object_id, timestamp_share).")
+    # === Show Core Semantic Data Preview ===
+st.markdown("### 🔬 Core Data Preview (Raw Semantic Columns)")
+st.markdown(f"**Data Source:** `{data_source_option}` | **Coordination Mode:** `{coordination_mode}` | **Total Rows:** `{len(combined_raw_df):,}`")
+
+# Define core columns
+core_columns = ['account_id', 'content_id', 'object_id', 'timestamp_share']
+available_core_cols = [col for col in core_columns if col in combined_raw_df.columns]
+
+if not combined_raw_df.empty and available_core_cols:
+    # Show top 10 rows of core columns
+    st.dataframe(combined_raw_df[available_core_cols].head(10), height=300)
+else:
+    st.info("No core data available to display (account_id, content_id, object_id, timestamp_share).")
 
     # Optional: Show source dataset distribution
     if 'source_dataset' in combined_raw_df.columns:
@@ -768,12 +775,12 @@ with tab3:
     st.subheader("🚨 High-Risk Accounts & Networks")
     
     if coordination_mode == "Text Content":
-        df_for_clustering = filtered_df_global[filtered_df_global['text'].astype(str).str.strip() != ""].copy()
-        if df_for_clustering.empty:
-            st.info("No valid text data for clustering analysis.")
-            clustered_df = pd.DataFrame()
-        else:
-            clustered_df = cached_clustering(df_for_clustering, data_source=data_source_type)
+    df_for_clustering = filtered_df_global[filtered_df_global['text'].astype(str).str.strip() != ""].copy()
+    if df_for_clustering.empty:
+        st.info("No valid text data for clustering analysis.")
+        clustered_df = pd.DataFrame()
+    else:
+        clustered_df = cached_clustering(df_for_clustering, data_source=data_source_type)
         
         if 'cluster' not in clustered_df.columns:
             st.warning("⚠️ Clustering did not return 'cluster' column. Displaying unclustered data.")
