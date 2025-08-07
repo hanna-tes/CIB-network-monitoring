@@ -225,7 +225,7 @@ def final_preprocess_and_map_columns(df, coordination_mode="Text Content"):
     return df_processed
 
 # --- Analysis Functions ---
-def cluster_texts(df, eps=0.3, min_samples=2):
+def cluster_texts(df, eps, min_samples, max_features):
     if 'original_text' not in df.columns or df['original_text'].nunique() <= 1:
         df_copy = df.copy()
         df_copy['cluster'] = -1
@@ -237,7 +237,7 @@ def cluster_texts(df, eps=0.3, min_samples=2):
         df_copy['cluster'] = -1
         return df_copy
     
-    vectorizer = TfidfVectorizer(stop_words='english', max_features=5000)
+    vectorizer = TfidfVectorizer(stop_words='english', max_features=max_features)
     try:
         tfidf_matrix = vectorizer.fit_transform(texts_to_cluster)
     except ValueError as e:
@@ -251,7 +251,7 @@ def cluster_texts(df, eps=0.3, min_samples=2):
     df_copy['cluster'] = clustering.labels_
     return df_copy
 
-def find_similarities_in_clusters(df, threshold=0.85):
+def find_similarities_in_clusters(df, threshold, max_features):
     """
     Detects highly similar text pairs by iterating through pre-clustered data.
     This is much faster than an all-pairs comparison.
@@ -274,7 +274,7 @@ def find_similarities_in_clusters(df, threshold=0.85):
         vectorizer = TfidfVectorizer(
             stop_words='english',
             ngram_range=(3, 5),
-            max_features=10000
+            max_features=max_features
         )
         try:
             tfidf_matrix = vectorizer.fit_transform(clean_df['text'])
@@ -404,12 +404,12 @@ def build_user_interaction_graph(df, coordination_type="text"):
 
 # --- Cached Functions ---
 @st.cache_data(show_spinner="🔍 Finding similar posts within clusters...")
-def cached_clustered_similarity_analysis(_df, threshold=0.85, data_source="default"):
-    return find_similarities_in_clusters(_df, threshold)
+def cached_clustered_similarity_analysis(_df, threshold, max_features, data_source="default"):
+    return find_similarities_in_clusters(_df, threshold, max_features)
 
 @st.cache_data(show_spinner="🧩 Clustering texts...")
-def cached_clustering(_df, data_source="default"):
-    return cluster_texts(_df)
+def cached_clustering(_df, eps, min_samples, max_features, data_source="default"):
+    return cluster_texts(_df, eps, min_samples, max_features)
 
 @st.cache_data(show_spinner="🕸️ Building network graph...")
 def cached_network_graph(_df_for_graph, coordination_type="text", data_source="default"):
@@ -770,14 +770,32 @@ with tab2:
             - **Media-to-Social Replication**: When content from a media outlet is replicated on a social media platform.
         """)
 
-        threshold_sim = st.slider("Similarity Threshold", min_value=0.75, max_value=0.99, value=0.90, step=0.01)
+        st.sidebar.markdown("---")
+        st.sidebar.subheader("⚙️ Similarity Tuning (Advanced)")
+        eps = st.sidebar.slider(
+            "DBSCAN Cluster Similarity Threshold (eps)",
+            min_value=0.1, max_value=1.0, value=0.3, step=0.05,
+            help="Lower values create more, smaller clusters. Higher values create fewer, larger clusters. A lower value can speed up the pairwise comparison stage."
+        )
+        min_samples = st.sidebar.slider(
+            "DBSCAN Minimum Samples per Cluster",
+            min_value=2, max_value=10, value=2, step=1,
+            help="Minimum number of posts to form a cluster. Increasing this can make clustering faster by ignoring small groups."
+        )
+        max_features = st.sidebar.slider(
+            "TF-IDF Max Features",
+            min_value=1000, max_value=10000, value=5000, step=1000,
+            help="The maximum number of unique words to consider. Lowering this can significantly speed up vectorization."
+        )
+
+        threshold_sim = st.slider("Similarity Threshold for Pairs", min_value=0.75, max_value=0.99, value=0.90, step=0.01)
         
         # New approach: First cluster the data, then find similarities within clusters
         with st.spinner("🚀 Speeding up analysis with clustering..."):
-            clustered_df = cached_clustering(df_for_analysis, data_source=data_source + "_" + coordination_mode)
+            clustered_df = cached_clustering(df_for_analysis, eps=eps, min_samples=min_samples, max_features=max_features, data_source=data_source + "_" + coordination_mode)
             
         with st.spinner("🕵️‍♂️ Finding similar posts within clusters..."):
-            similar_pairs_df = cached_clustered_similarity_analysis(clustered_df, threshold=threshold_sim, data_source=data_source + "_" + coordination_mode + "_" + str(threshold_sim))
+            similar_pairs_df = cached_clustered_similarity_analysis(clustered_df, threshold=threshold_sim, max_features=max_features, data_source=data_source + "_" + coordination_mode + "_" + str(threshold_sim))
 
         if not similar_pairs_df.empty:
             st.info(f"✅ Found {len(similar_pairs_df)} pairs of posts with similarity score ≥ {threshold_sim:.2f}.")
@@ -844,7 +862,7 @@ with tab3:
     if coordination_mode == "Text Content":
         df_for_graph = df_for_analysis
         with st.spinner("🗂️ Pre-processing data for network graph..."):
-            df_for_graph = cached_clustering(df_for_graph, data_source=data_source + "_" + coordination_mode)
+            df_for_graph = cached_clustering(df_for_graph, eps=eps, min_samples=min_samples, max_features=max_features, data_source=data_source + "_" + coordination_mode)
         
         G_text, pos_text, cluster_map_text = cached_network_graph(df_for_graph, coordination_type="text", data_source=data_source + "_" + coordination_mode)
         G = G_text
