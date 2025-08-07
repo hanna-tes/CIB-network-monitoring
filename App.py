@@ -327,6 +327,7 @@ def find_coordinated_groups(df, threshold, max_features):
                         
                         # --- MODIFIED: Generate a more meaningful narrative snippet ---
                         # Extract all text from the group's posts
+                        # Extract all text from the group's posts
                         all_group_texts = group_posts['text'].tolist()
                         if all_group_texts:
                             # Re-vectorize on the smaller group with ngrams
@@ -337,7 +338,7 @@ def find_coordinated_groups(df, threshold, max_features):
                             )
                             narrative_matrix = narrative_vectorizer.fit_transform(all_group_texts)
                             feature_names = narrative_vectorizer.get_feature_names_out()
-                            
+                        
                             # Sum the TF-IDF scores for each feature to find the most important ones
                             sums = narrative_matrix.sum(axis=0)
                             top_feature_indices = sums.argsort()[:, ::-1][:, :5].tolist()[0]
