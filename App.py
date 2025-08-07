@@ -47,13 +47,21 @@ def infer_platform_from_url(url):
 def extract_original_text(text):
     """
     Cleans text by removing RT/QT prefixes, @mentions, URLs, and normalizing spaces.
-    Used for similarity analysis.
+    Crucially, it now removes dates and years to prevent them from dominating the narrative summary.
     """
     if pd.isna(text) or not isinstance(text, str):
         return ""
     cleaned = re.sub(r'^(RT|rt|QT|qt)\s+@\w+:\s*', '', text, flags=re.IGNORECASE).strip()
     cleaned = re.sub(r'@\w+', '', cleaned).strip()
     cleaned = re.sub(r'http\S+|www\S+|https\S+', '', cleaned).strip()
+    
+    # --- NEW: Remove dates, years, and common month names ---
+    # Matches patterns like "June 17", "17 June", "17/06/2025", "2025"
+    cleaned = re.sub(r'\b(january|february|march|april|may|june|july|august|september|october|november|december|jan|feb|mar|apr|jun|jul|aug|sep|oct|nov|dec)\s+\d{1,2}\b', '', cleaned, flags=re.IGNORECASE)
+    cleaned = re.sub(r'\b\d{1,2}\s+(january|february|march|april|may|june|july|august|september|october|november|december|jan|feb|mar|apr|jun|jul|aug|sep|oct|nov|dec)\b', '', cleaned, flags=re.IGNORECASE)
+    cleaned = re.sub(r'\b\d{1,2}/\d{1,2}/\d{2,4}\b', '', cleaned)
+    cleaned = re.sub(r'\b\d{4}\b', '', cleaned)
+    
     cleaned = re.sub(r"\\n|\\r|\\t", " ", cleaned).strip()
     cleaned = re.sub(r'\s+', ' ', cleaned).strip()
     return cleaned.lower()
@@ -327,7 +335,6 @@ def find_coordinated_groups(df, threshold, max_features):
                         
                         # --- MODIFIED: Generate a more meaningful narrative snippet ---
                         # Extract all text from the group's posts
-                        # Extract all text from the group's posts
                         all_group_texts = group_posts['text'].tolist()
                         if all_group_texts:
                             # Re-vectorize on the smaller group with ngrams
@@ -338,7 +345,7 @@ def find_coordinated_groups(df, threshold, max_features):
                             )
                             narrative_matrix = narrative_vectorizer.fit_transform(all_group_texts)
                             feature_names = narrative_vectorizer.get_feature_names_out()
-                        
+                            
                             # Sum the TF-IDF scores for each feature to find the most important ones
                             sums = narrative_matrix.sum(axis=0)
                             top_feature_indices = sums.argsort()[:, ::-1][:, :5].tolist()[0]
