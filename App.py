@@ -12,6 +12,7 @@ from itertools import combinations
 import re
 from io import BytesIO
 from io import StringIO
+from collections import Counter
 
 # --- Set Page Config ---
 st.set_page_config(page_title="CIB Dashboard", layout="wide")
@@ -183,9 +184,19 @@ def final_preprocess_and_map_columns(df, coordination_mode="Text Content"):
     Respects coordination_mode: uses text or URL as object_id.
     Ensures timestamp_share is UNIX integer.
     """
-    if df.empty:
-        return df
     df_processed = df.copy()
+
+    # Create all required columns even if the dataframe is empty
+    if df_processed.empty:
+        df_processed['URL'] = pd.Series([], dtype='object')
+        df_processed['Platform'] = pd.Series([], dtype='object')
+        df_processed['original_text'] = pd.Series([], dtype='object')
+        df_processed['Outlet'] = pd.Series([], dtype='object')
+        df_processed['Channel'] = pd.Series([], dtype='object')
+        df_processed['object_id'] = pd.Series([], dtype='object')
+        df_processed['timestamp_share'] = pd.Series([], dtype='Int64')
+        return df_processed
+    
     df_processed.rename(columns={'original_url': 'URL'}, inplace=True)
     df_processed['object_id'] = df_processed['object_id'].astype(str).replace('nan', '').fillna('')
     df_processed = df_processed[df_processed['object_id'].str.strip() != ""].copy()
@@ -313,9 +324,27 @@ def find_coordinated_groups(df, threshold, max_features):
                     
                     # --- CORE LOGIC FOR AMPLIFICATION: Only consider a group coordinated if there are multiple unique accounts ---
                     if len(group_posts['account_id'].unique()) > 1:
-                        # Determine a single representative snippet for the group
-                        representative_text = group_posts['text'].iloc[0]
-                        snippet = representative_text[:120] + ("..." if len(representative_text) > 120 else "")
+                        
+                        # --- MODIFIED: Generate a more meaningful narrative snippet ---
+                        # Extract all text from the group's posts
+                        all_group_texts = group_posts['text'].tolist()
+                        if all_group_texts:
+                            # Re-vectorize on the smaller group with ngrams
+                            narrative_vectorizer = TfidfVectorizer(
+                                stop_words='english',
+                                ngram_range=(2, 3), # Use bigrams and trigrams for better context
+                                max_features=10
+                            )
+                            narrative_matrix = narrative_vectorizer.fit_transform(all_group_texts)
+                            feature_names = narrative_vectorizer.get_feature_names_out()
+                            
+                            # Sum the TF-IDF scores for each feature to find the most important ones
+                            sums = narrative_matrix.sum(axis=0)
+                            top_feature_indices = sums.argsort()[:, ::-1][:, :5].tolist()[0]
+                            top_keywords = [feature_names[i] for i in top_feature_indices]
+                            representative_text = ", ".join(top_keywords) if top_keywords else "No clear narrative found."
+                        else:
+                            representative_text = "No clear narrative found."
 
                         # Calculate max similarity in the group (for a score)
                         group_sim_scores = cosine_sim[np.ix_(group_indices, group_indices)]
@@ -326,7 +355,7 @@ def find_coordinated_groups(df, threshold, max_features):
                             "posts": group_posts.to_dict('records'),
                             "num_posts": len(group_posts),
                             "num_accounts": len(group_posts['account_id'].unique()),
-                            "shared_narrative_snippet": snippet,
+                            "shared_narrative_snippet": representative_text,
                             "max_similarity_score": round(max_sim, 3),
                             "coordination_type": "TBD" # Will be set below
                         }
@@ -620,8 +649,12 @@ else:
     min_ts = df['timestamp_share'].min()
     max_ts = df['timestamp_share'].max()
 
-min_date = pd.to_datetime(min_ts, unit='s').date() if pd.notna(min_ts) else pd.Timestamp.now().date()
-max_date = pd.to_datetime(max_ts, unit='s').date() if pd.notna(max_ts) else pd.Timestamp.now().date()
+if pd.isna(min_ts) or pd.isna(max_ts):
+    min_date = pd.Timestamp.now().date()
+    max_date = pd.Timestamp.now().date()
+else:
+    min_date = pd.to_datetime(min_ts, unit='s').date() if pd.notna(min_ts) else pd.Timestamp.now().date()
+    max_date = pd.to_datetime(max_ts, unit='s').date() if pd.notna(max_ts) else pd.Timestamp.now().date()
 
 selected_date_range = st.sidebar.date_input("Date Range", value=[min_date, max_date], min_value=min_date, max_value=max_date)
 
@@ -632,11 +665,15 @@ else:
     start_ts = int(pd.Timestamp(selected_date_range[0], tz='UTC').timestamp())
     end_ts = start_ts + 86400 - 1
 
-filtered_df_global = df[
-    (df['timestamp_share'] >= start_ts) &
-    (df['timestamp_share'] <= end_ts) &
-    (df['Platform'].isin(df['Platform'].dropna().unique()))
-].copy()
+if 'Platform' in df.columns:
+    filtered_df_global = df[
+        (df['timestamp_share'] >= start_ts) &
+        (df['timestamp_share'] <= end_ts) &
+        (df['Platform'].isin(df['Platform'].dropna().unique()))
+    ].copy()
+else:
+    st.error("Platform column is missing from the DataFrame.")
+    filtered_df_global = pd.DataFrame()
 
 # Add new control to limit posts
 st.sidebar.markdown("---")
