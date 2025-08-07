@@ -310,8 +310,6 @@ def find_coordinated_groups(df, threshold, max_features):
                 if len(group) > 1:
                     # Collect all posts in this connected component
                     group_posts = clean_df.iloc[group].copy()
-                    group_posts['original_text_with_links'] = group.apply(lambda idx: group['text'][idx], axis=1) # Preserve full original text for snippet
-                    group_posts['source_cluster_id'] = cluster_id
                     
                     # Determine a single representative snippet for the group
                     representative_text = group_posts['text'].iloc[0]
