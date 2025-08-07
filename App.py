@@ -226,15 +226,17 @@ def final_preprocess_and_map_columns(df, coordination_mode="Text Content"):
 
 # --- Analysis Functions ---
 def cluster_texts(df, eps=0.3, min_samples=2):
-    if 'original_text' not in df.columns:
+    if 'original_text' not in df.columns or df['original_text'].nunique() <= 1:
         df_copy = df.copy()
         df_copy['cluster'] = -1
         return df_copy
+    
     texts_to_cluster = df['original_text'].astype(str).tolist()
     if not texts_to_cluster or all(t.strip() == "" for t in texts_to_cluster):
         df_copy = df.copy()
         df_copy['cluster'] = -1
         return df_copy
+    
     vectorizer = TfidfVectorizer(stop_words='english', max_features=5000)
     try:
         tfidf_matrix = vectorizer.fit_transform(texts_to_cluster)
@@ -242,11 +244,105 @@ def cluster_texts(df, eps=0.3, min_samples=2):
         df_copy = df.copy()
         df_copy['cluster'] = -1
         return df_copy
+        
     eps = max(0.01, min(0.99, eps))
     clustering = DBSCAN(metric='cosine', eps=eps, min_samples=min_samples).fit(tfidf_matrix)
     df_copy = df.copy()
     df_copy['cluster'] = clustering.labels_
     return df_copy
+
+def find_similarities_in_clusters(df, threshold=0.85):
+    """
+    Detects highly similar text pairs by iterating through pre-clustered data.
+    This is much faster than an all-pairs comparison.
+    """
+    text_col = 'original_text'
+    social_media_platforms = {'TikTok', 'Facebook', 'X', 'YouTube', 'Instagram', 'Telegram'}
+    
+    similar_pairs = []
+    
+    clustered_groups = df[df['cluster'] != -1].groupby('cluster')
+    
+    for cluster_id, group in clustered_groups:
+        if len(group) < 2:
+            continue
+            
+        clean_df = group[['account_id', 'timestamp_share', 'Platform', 'URL', text_col]].copy()
+        clean_df = clean_df.rename(columns={text_col: 'text', 'timestamp_share': 'Timestamp'})
+        clean_df = clean_df.reset_index(drop=True)
+        
+        vectorizer = TfidfVectorizer(
+            stop_words='english',
+            ngram_range=(3, 5),
+            max_features=10000
+        )
+        try:
+            tfidf_matrix = vectorizer.fit_transform(clean_df['text'])
+        except Exception:
+            continue
+
+        sim_matrix = cosine_similarity(tfidf_matrix)
+        np.fill_diagonal(sim_matrix, 0)
+        sim_matrix = np.triu(sim_matrix, k=1)
+
+        idx_i, idx_j = np.where(sim_matrix >= threshold)
+        
+        for i, j in zip(idx_i, idx_j):
+            row1 = clean_df.iloc[i]
+            row2 = clean_df.iloc[j]
+            
+            if row1['account_id'] == row2['account_id']:
+                continue
+                
+            similarity = round(sim_matrix[i, j], 3)
+            
+            if similarity >= 0.98:
+                level = "🚨 Exact Copy / Bot-Level"
+            elif similarity >= 0.95:
+                level = "🔥 Near-Identical Coordination"
+            elif similarity >= 0.90:
+                level = "🟡 Highly Similar Messaging"
+            elif similarity >= 0.85:
+                level = "🟢 Loosely Similar"
+            else:
+                level = "⚪ Below Threshold"
+
+            platform1_is_social = row1['Platform'] in social_media_platforms
+            platform2_is_social = row2['Platform'] in social_media_platforms
+            platform1_is_media = row1['Platform'] in {'News/Media', 'Media'}
+            platform2_is_media = row2['Platform'] in {'News/Media', 'Media'}
+            
+            if platform1_is_media and platform2_is_media:
+                coordination_type = "Syndication (Media Outlets)"
+            elif platform1_is_social and platform2_is_social:
+                coordination_type = "Coordinated Amplification (Social Media)"
+            elif (platform1_is_media and platform2_is_social) or (platform1_is_social and platform2_is_media):
+                coordination_type = "Media-to-Social Replication"
+            else:
+                coordination_type = "Other / Uncategorized"
+            
+            snippet = row1['text'][:120] + ("..." if len(row1['text']) > 120 else "")
+
+            timestamp1_utc = pd.to_datetime(row1['Timestamp'], unit='s', utc=True).strftime('%Y-%m-%d %H:%M:%S UTC')
+            timestamp2_utc = pd.to_datetime(row2['Timestamp'], unit='s', utc=True).strftime('%Y-%m-%d %H:%M:%S UTC')
+            
+            similar_pairs.append({
+                'shared_narrative_snippet': snippet,
+                'similarity_score': similarity,
+                'similarity_level': level,
+                'coordination_type': coordination_type,
+                'account_id_1': row1['account_id'],
+                'platform_1': row1['Platform'],
+                'timestamp_1': timestamp1_utc,
+                'url_1': row1['URL'],
+                'account_id_2': row2['account_id'],
+                'platform_2': row2['Platform'],
+                'timestamp_2': timestamp2_utc,
+                'url_2': row2['URL'],
+                'platforms_involved': f"{row1['Platform']} ↔ {row2['Platform']}"
+            })
+
+    return pd.DataFrame(similar_pairs)
 
 def build_user_interaction_graph(df, coordination_type="text"):
     G = nx.Graph()
@@ -306,113 +402,10 @@ def build_user_interaction_graph(df, coordination_type="text"):
     cluster_map = {node: G.nodes[node].get('cluster', -2) for node in G.nodes()}
     return G, pos, cluster_map
 
-def find_textual_similarities(df, threshold=0.85):
-    """
-    Detects highly similar text pairs with clear labeling for coordination.
-    Focuses on original, non-repost content.
-    Adds a 'similarity_level' and 'coordination_type' column.
-    """
-    text_col = 'original_text'
-    social_media_platforms = {'TikTok', 'Facebook', 'X', 'YouTube', 'Instagram', 'Telegram'}
-    
-    clean_df = df[['account_id', 'timestamp_share', 'Platform', 'URL', text_col]].copy()
-    clean_df = clean_df.rename(columns={text_col: 'text', 'timestamp_share': 'Timestamp'})
-    
-    clean_df['text'] = clean_df['text'].astype(str).str.strip()
-    clean_df = clean_df[
-        (clean_df['text'].notna()) &
-        (clean_df['text'] != "") &
-        (clean_df['text'].str.lower() != "nan")
-    ].copy()
-    
-    if len(clean_df) < 2:
-        return pd.DataFrame()
-
-    vectorizer = TfidfVectorizer(
-        stop_words='english',
-        ngram_range=(3, 5),
-        max_features=10000
-    )
-    try:
-        tfidf_matrix = vectorizer.fit_transform(clean_df['text'])
-    except Exception as e:
-        st.warning(f"TF-IDF failed: {e}")
-        return pd.DataFrame()
-
-    sim_matrix = cosine_similarity(tfidf_matrix)
-    np.fill_diagonal(sim_matrix, 0)
-    sim_matrix = np.triu(sim_matrix, k=1)
-
-    idx_i, idx_j = np.where(sim_matrix >= threshold)
-    seen = set()
-    similar_pairs = []
-
-    for i, j in zip(idx_i, idx_j):
-        key = tuple(sorted([i, j]))
-        if key in seen:
-            continue
-        seen.add(key)
-        
-        row1 = clean_df.iloc[i]
-        row2 = clean_df.iloc[j]
-        
-        if row1['account_id'] == row2['account_id']:
-            continue
-            
-        similarity = round(sim_matrix[i, j], 3)
-        
-        if similarity >= 0.98:
-            level = "🚨 Exact Copy / Bot-Level"
-        elif similarity >= 0.95:
-            level = "🔥 Near-Identical Coordination"
-        elif similarity >= 0.90:
-            level = "🟡 Highly Similar Messaging"
-        elif similarity >= 0.85:
-            level = "🟢 Loosely Similar"
-        else:
-            level = "⚪ Below Threshold"
-
-        # Determine coordination type based on platforms
-        platform1_is_social = row1['Platform'] in social_media_platforms
-        platform2_is_social = row2['Platform'] in social_media_platforms
-        platform1_is_media = row1['Platform'] in {'News/Media', 'Media'}
-        platform2_is_media = row2['Platform'] in {'News/Media', 'Media'}
-        
-        if platform1_is_media and platform2_is_media:
-            coordination_type = "Syndication (Media Outlets)"
-        elif platform1_is_social and platform2_is_social:
-            coordination_type = "Coordinated Amplification (Social Media)"
-        elif (platform1_is_media and platform2_is_social) or (platform1_is_social and platform2_is_media):
-            coordination_type = "Media-to-Social Replication"
-        else:
-            coordination_type = "Other / Uncategorized"
-        
-        snippet = row1['text'][:120] + ("..." if len(row1['text']) > 120 else "")
-
-        timestamp1_utc = pd.to_datetime(row1['Timestamp'], unit='s', utc=True).strftime('%Y-%m-%d %H:%M:%S UTC')
-        timestamp2_utc = pd.to_datetime(row2['Timestamp'], unit='s', utc=True).strftime('%Y-%m-%d %H:%M:%S UTC')
-        
-        similar_pairs.append({
-            'shared_narrative_snippet': snippet,
-            'similarity_score': similarity,
-            'similarity_level': level,
-            'coordination_type': coordination_type,
-            'account_id_1': row1['account_id'],
-            'platform_1': row1['Platform'],
-            'timestamp_1': timestamp1_utc,
-            'url_1': row1['URL'],
-            'account_id_2': row2['account_id'],
-            'platform_2': row2['Platform'],
-            'timestamp_2': timestamp2_utc,
-            'url_2': row2['URL'],
-            'platforms_involved': f"{row1['Platform']} ↔ {row2['Platform']}"
-        })
-
-    return pd.DataFrame(similar_pairs)
 # --- Cached Functions ---
-@st.cache_data(show_spinner="🔍 Computing textual similarities...")
-def cached_similarity_analysis(_df, threshold=0.85, data_source="default"):
-    return find_textual_similarities(_df, threshold)
+@st.cache_data(show_spinner="🔍 Finding similar posts within clusters...")
+def cached_clustered_similarity_analysis(_df, threshold=0.85, data_source="default"):
+    return find_similarities_in_clusters(_df, threshold)
 
 @st.cache_data(show_spinner="🧩 Clustering texts...")
 def cached_clustering(_df, data_source="default"):
@@ -779,9 +772,12 @@ with tab2:
 
         threshold_sim = st.slider("Similarity Threshold", min_value=0.75, max_value=0.99, value=0.90, step=0.01)
         
-        # Use df_for_analysis
-        with st.spinner("🕵️‍♂️ Finding similar posts..."):
-            similar_pairs_df = cached_similarity_analysis(df_for_analysis, threshold=threshold_sim, data_source=data_source + "_" + coordination_mode + "_" + str(threshold_sim))
+        # New approach: First cluster the data, then find similarities within clusters
+        with st.spinner("🚀 Speeding up analysis with clustering..."):
+            clustered_df = cached_clustering(df_for_analysis, data_source=data_source + "_" + coordination_mode)
+            
+        with st.spinner("🕵️‍♂️ Finding similar posts within clusters..."):
+            similar_pairs_df = cached_clustered_similarity_analysis(clustered_df, threshold=threshold_sim, data_source=data_source + "_" + coordination_mode + "_" + str(threshold_sim))
 
         if not similar_pairs_df.empty:
             st.info(f"✅ Found {len(similar_pairs_df)} pairs of posts with similarity score ≥ {threshold_sim:.2f}.")
