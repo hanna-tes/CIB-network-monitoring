@@ -310,16 +310,14 @@ def find_textual_similarities(df, threshold=0.85):
     """
     Detects highly similar text pairs with clear labeling for coordination.
     Focuses on original, non-repost content.
-    Adds a 'similarity_level' column to help users interpret results.
+    Adds a 'similarity_level' and 'coordination_type' column.
     """
-    # Use 'original_text' or fallback to 'text'
-    text_col = 'original_text' if 'original_text' in df.columns else 'text'
+    text_col = 'original_text'
+    social_media_platforms = {'TikTok', 'Facebook', 'X', 'YouTube', 'Instagram', 'Telegram'}
     
-    # Fixed: Use 'timestamp_share' instead of 'Timestamp' to resolve KeyError
     clean_df = df[['account_id', 'timestamp_share', 'Platform', 'URL', text_col]].copy()
     clean_df = clean_df.rename(columns={text_col: 'text', 'timestamp_share': 'Timestamp'})
     
-    # Clean and filter
     clean_df['text'] = clean_df['text'].astype(str).str.strip()
     clean_df = clean_df[
         (clean_df['text'].notna()) &
@@ -330,10 +328,9 @@ def find_textual_similarities(df, threshold=0.85):
     if len(clean_df) < 2:
         return pd.DataFrame()
 
-    # Use longer n-grams to catch sentence-level copying
     vectorizer = TfidfVectorizer(
         stop_words='english',
-        ngram_range=(3, 5),  # Catch phrases, not just words
+        ngram_range=(3, 5),
         max_features=10000
     )
     try:
@@ -359,13 +356,11 @@ def find_textual_similarities(df, threshold=0.85):
         row1 = clean_df.iloc[i]
         row2 = clean_df.iloc[j]
         
-        # Skip if same account
         if row1['account_id'] == row2['account_id']:
             continue
             
         similarity = round(sim_matrix[i, j], 3)
         
-        # Label similarity level
         if similarity >= 0.98:
             level = "🚨 Exact Copy / Bot-Level"
         elif similarity >= 0.95:
@@ -377,10 +372,17 @@ def find_textual_similarities(df, threshold=0.85):
         else:
             level = "⚪ Below Threshold"
 
-        # Extract short snippet
+        # Determine coordination type based on platforms
+        platform1_is_social = row1['Platform'] in social_media_platforms
+        platform2_is_social = row2['Platform'] in social_media_platforms
+        
+        if platform1_is_social and platform2_is_social:
+            coordination_type = "Coordinated Amplification (Social Media)"
+        else:
+            coordination_type = "Syndication (Media Posts)"
+        
         snippet = row1['text'][:120] + ("..." if len(row1['text']) > 120 else "")
 
-        # Convert Unix timestamps to UTC datetime strings for display
         timestamp1_utc = pd.to_datetime(row1['Timestamp'], unit='s', utc=True).strftime('%Y-%m-%d %H:%M:%S UTC')
         timestamp2_utc = pd.to_datetime(row2['Timestamp'], unit='s', utc=True).strftime('%Y-%m-%d %H:%M:%S UTC')
         
@@ -388,14 +390,13 @@ def find_textual_similarities(df, threshold=0.85):
             'shared_narrative_snippet': snippet,
             'similarity_score': similarity,
             'similarity_level': level,
+            'coordination_type': coordination_type,
             'account_id_1': row1['account_id'],
             'platform_1': row1['Platform'],
-            # Fixed: use the renamed 'Timestamp' column and format to UTC
             'timestamp_1': timestamp1_utc,
             'url_1': row1['URL'],
             'account_id_2': row2['account_id'],
             'platform_2': row2['Platform'],
-            # Fixed: use the renamed 'Timestamp' column and format to UTC
             'timestamp_2': timestamp2_utc,
             'url_2': row2['URL'],
             'platforms_involved': f"{row1['Platform']} ↔ {row2['Platform']}"
@@ -698,133 +699,107 @@ with tab1:
 
 # ==================== TAB 2: Similarity & Coordination ====================
 with tab2:
-    st.subheader("🧠 Narrative Detection & Coordination")
-    st.markdown(f"**Current Mode:** Analyzing coordination by **{coordination_mode}**")
-    st.markdown("---")
+    st.subheader("🕵️‍♀️ Similarity & Coordination Analysis")
+    st.markdown("""
+        This section identifies coordinated activities by analyzing posts with high textual similarity.
+        - **Coordinated Amplification**: Posts on social media platforms that are highly similar in text, suggesting a coordinated effort to spread a message.
+        - **Syndication**: Highly similar posts where at least one post originates from a news or media outlet, suggesting media content is being replicated on social platforms.
+    """)
 
     if coordination_mode == "Text Content":
-        platforms_analysis = st.multiselect(
-            "Platforms to include in Similarity Analysis:",
-            options=filtered_df_global['Platform'].dropna().astype(str).unique().tolist(),
-            default=filtered_df_global['Platform'].dropna().astype(str).unique().tolist(),
-            key="platforms_analysis_tab2"
-        )
+        st.subheader("Textual Similarity Analysis")
+        threshold_sim = st.slider("Similarity Threshold", min_value=0.75, max_value=0.99, value=0.90, step=0.01)
+        
+        with st.spinner("🕵️‍♂️ Finding similar posts..."):
+            similar_pairs_df = cached_similarity_analysis(filtered_df_global, threshold=threshold_sim, data_source=data_source + "_" + coordination_mode + "_" + str(threshold_sim))
 
-        MAX_ROWS_SIMILARITY = st.slider(
-            "Max posts to analyze for similarity (for performance)",
-            100, 1000, 300,
-            step=50,
-            help="High numbers might cause long processing times."
-        )
+        if not similar_pairs_df.empty:
+            st.info(f"✅ Found {len(similar_pairs_df)} pairs of posts with similarity score ≥ {threshold_sim:.2f}.")
 
-        analysis_df = filtered_df_global[
-            filtered_df_global['Platform'].isin(platforms_analysis)
-        ].head(MAX_ROWS_SIMILARITY)
-
-        if not analysis_df.empty:
-            similarity_threshold = st.slider(
-                "Similarity Score Threshold (Cosine Similarity)",
-                0.0, 1.0, 0.85, step=0.05,
-                help="Higher values detect closer matches (e.g., exact copies). Lower values detect similar themes."
-            )
+            st.markdown("### Coordinated Amplification & Syndication Results")
+            display_cols = [
+                'coordination_type', 'shared_narrative_snippet', 'similarity_score', 'similarity_level', 
+                'account_id_1', 'platform_1', 'timestamp_1', 'url_1',
+                'account_id_2', 'platform_2', 'timestamp_2', 'url_2'
+            ]
+            st.dataframe(similar_pairs_df[display_cols].sort_values(by='similarity_score', ascending=False), height=500, use_container_width=True)
             
-            similarities = cached_similarity_analysis(analysis_df, threshold=similarity_threshold, data_source=f"{data_source}_{coordination_mode}")
-            if not similarities.empty:
-                # Filter for scores > 0.95 as requested
-                high_similarity_df = similarities[similarities['similarity_score'] > 0.95].copy()
-                if not high_similarity_df.empty:
-                    # Add a new column for coordination type based on platform
-                    def get_coordination_type(platforms_involved):
-                        if "News/Media" in platforms_involved or "Media" in platforms_involved:
-                            return "Syndication (Media Post)"
-                        return "Coordinated Amplification (Social)"
-                    
-                    high_similarity_df['Coordination Type'] = high_similarity_df['platforms_involved'].apply(get_coordination_type)
-                    
-                    st.success(f"✅ Found {len(high_similarity_df)} highly similar pairs (score > 0.95).")
-                    st.dataframe(high_similarity_df, use_container_width=True)
-                else:
-                    st.info("No highly similar text pairs found with a score greater than 0.95.")
-            else:
-                st.info("No similar text pairs found above the selected threshold.")
+            # --- Download button for similar pairs ---
+            similar_pairs_csv = convert_df_to_csv(similar_pairs_df)
+            st.download_button(
+                "Download Similar Pairs CSV",
+                similar_pairs_csv,
+                f"similar_posts_analysis_{threshold_sim}.csv",
+                "text/csv",
+                help="Downloads the table of identified similar post pairs."
+            )
+
+        else:
+            st.warning("No significant textual similarities found above the selected threshold.")
 
     elif coordination_mode == "Shared URLs":
-        st.info("This mode groups accounts that have shared the exact same URLs.")
-        if st.button("Run Shared URL Analysis"):
-            url_counts = filtered_df_global['URL'].value_counts()
-            shared_urls = url_counts[url_counts > 1].index.tolist()
-            if not shared_urls:
-                st.info("No URLs were shared by more than one account in the selected timeframe.")
-            else:
-                shared_url_df = filtered_df_global[filtered_df_global['URL'].isin(shared_urls)].sort_values(['URL', 'timestamp_share'])
-                if not shared_url_df.empty:
-                    st.success(f"✅ Found {len(shared_urls)} URLs shared by multiple accounts.")
-                    st.dataframe(shared_url_df, use_container_width=True)
+        st.subheader("Shared URLs Analysis")
+        with st.spinner("🔗 Finding posts that share the same URLs..."):
+            shared_url_df = filtered_df_global[
+                filtered_df_global['URL'].notna() &
+                (filtered_df_global['URL'].str.strip() != "")
+            ].copy()
+            if not shared_url_df.empty:
+                url_counts = shared_url_df['URL'].value_counts()
+                coordination_urls = url_counts[url_counts > 1].index.tolist()
+                coordination_df = shared_url_df[shared_url_df['URL'].isin(coordination_urls)].sort_values(by='URL')
+                
+                if not coordination_df.empty:
+                    st.info(f"✅ Found {len(coordination_urls)} URLs shared by more than one account.")
+                    st.markdown("### Posts Sharing the Same URL")
+                    st.dataframe(coordination_df[['account_id', 'Platform', 'timestamp_share', 'URL']].reset_index(drop=True), height=500, use_container_width=True)
+                    
+                    # --- Download button for shared URLs ---
+                    shared_url_csv = convert_df_to_csv(coordination_df)
+                    st.download_button(
+                        "Download Shared URLs CSV",
+                        shared_url_csv,
+                        "shared_urls_analysis.csv",
+                        "text/csv",
+                        help="Downloads the list of posts that share the same URLs."
+                    )
                 else:
-                    st.info("No URLs were shared by more than one account in the selected timeframe.")
-    
+                    st.warning("No URLs were shared by more than one account.")
+            else:
+                st.warning("No valid URLs found in the dataset.")
+
 # ==================== TAB 3: Network & Risk ====================
 with tab3:
-    st.subheader("🌐 User Network Analysis")
-    st.markdown(f"**Current Mode:** Analyzing coordination by **{coordination_mode}**")
-    st.markdown("---")
+    st.subheader("🕸️ Network Graph of Coordinated Activity")
+    st.markdown("This visualization shows a network of accounts involved in coordinated activity. A link between two accounts means they posted similar content or shared the same URL.")
     
+    # Decide which DataFrame to use for the graph based on coordination mode
     if coordination_mode == "Text Content":
-        df_clustered = cached_clustering(filtered_df_global, data_source=f"{data_source}_{coordination_mode}")
-        coordination_type_graph = "text"
-        graph_df = df_clustered
+        df_for_graph = filtered_df_global
+        with st.spinner("🗂️ Pre-processing data for network graph..."):
+            df_for_graph = cached_clustering(df_for_graph, data_source=data_source + "_" + coordination_mode)
         
+        G_text, pos_text, cluster_map_text = cached_network_graph(df_for_graph, coordination_type="text", data_source=data_source + "_" + coordination_mode)
+        G = G_text
+        pos = pos_text
+        cluster_map = cluster_map_text
+        st.info("Nodes are accounts, colored by content cluster. Edges show co-participation in a cluster.")
+
     elif coordination_mode == "Shared URLs":
-        coordination_type_graph = "url"
-        graph_df = filtered_df_global.copy()
+        df_for_graph = filtered_df_global
+        G_url, pos_url, cluster_map_url = cached_network_graph(df_for_graph, coordination_type="url", data_source=data_source + "_" + coordination_mode)
+        G = G_url
+        pos = pos_url
+        cluster_map = cluster_map_url
+        st.info("Nodes are accounts, colored by a grouping of shared URLs. Edges show co-sharing of URLs.")
 
-    if graph_df.empty:
-        st.warning("No data to build a network graph.")
-        st.stop()
-    
-    with st.spinner("Building and visualizing network graph..."):
-        G, pos, cluster_map = cached_network_graph(graph_df, coordination_type_graph, data_source=f"{data_source}_{coordination_mode}")
-
-    if not G.nodes:
-        st.info("No network to display. This might be because no accounts are sharing similar content or URLs.")
+    if not G.nodes():
+        st.warning("No coordinated activity detected to build a network graph.")
     else:
-        num_nodes = G.number_of_nodes()
-        num_edges = G.number_of_edges()
-        st.write(f"**Graph Metrics:** {num_nodes} nodes (accounts), {num_edges} edges (coordination links).")
-        st.markdown("Nodes are individual accounts. Edges represent a coordinated action (sharing similar text or the same URL).")
-        
-        node_x = [pos[node][0] for node in G.nodes()]
-        node_y = [pos[node][1] for node in G.nodes()]
-        
-        platforms = [G.nodes[node]['platform'] for node in G.nodes()]
-        
-        # Determine colors for each platform
-        unique_platforms = sorted(list(set(platforms)))
-        platform_color_map = px.colors.qualitative.Plotly[:len(unique_platforms)]
-        platform_to_color = {platform: color for platform, color in zip(unique_platforms, platform_color_map)}
-        
-        colors = [platform_to_color[p] for p in platforms]
-        
-        node_trace = go.Scatter(
-            x=node_x, y=node_y,
-            mode='markers',
-            hoverinfo='text',
-            marker=dict(
-                showscale=False,
-                colorscale='YlGnBu',
-                reversescale=True,
-                color=colors,
-                size=10,
-                line_width=2
-            )
-        )
-        
-        node_hover_text = [
-            f"Account: {node}<br>Platform: {G.nodes[node].get('platform', 'Unknown')}"
-            for node in G.nodes()
-        ]
-        node_trace.text = node_hover_text
-        
+        # Create Plotly figure
+        fig_net = go.Figure()
+
+        # Add edges as lines
         edge_x = []
         edge_y = []
         for edge in G.edges():
@@ -833,46 +808,96 @@ with tab3:
             edge_x.extend([x0, x1, None])
             edge_y.extend([y0, y1, None])
         
-        edge_trace = go.Scatter(
+        fig_net.add_trace(go.Scatter(
             x=edge_x, y=edge_y,
             line=dict(width=0.5, color='#888'),
             hoverinfo='none',
-            mode='lines'
+            mode='lines'))
+
+        # Add nodes with hover info
+        node_x = []
+        node_y = []
+        node_text = []
+        node_color = []
+        for node in G.nodes():
+            x, y = pos[node]
+            node_x.append(x)
+            node_y.append(y)
+            hover_text = f"User: {node}<br>Platform: {G.nodes[node].get('platform', 'N/A')}"
+            node_text.append(hover_text)
+            
+            # Use a consistent color for clusters, or gray for unclustered
+            cluster_id = cluster_map.get(node)
+            if cluster_id != -1 and cluster_id != -2 and not isinstance(cluster_id, str) and not cluster_id.startswith("SharedURL_Group"):
+                node_color.append(f"Cluster {cluster_id}")
+            elif isinstance(cluster_id, str):
+                 node_color.append(cluster_id)
+            else:
+                node_color.append("No Coordination")
+
+        # Create a DataFrame for node coloring and size
+        nodes_df = pd.DataFrame({
+            'x': node_x,
+            'y': node_y,
+            'text': node_text,
+            'color': node_color,
+            'size': [G.degree(node) for node in G.nodes()]
+        })
+
+        # Add nodes as markers
+        fig_net.add_trace(go.Scatter(
+            x=nodes_df['x'],
+            y=nodes_df['y'],
+            mode='markers',
+            hoverinfo='text',
+            text=nodes_df['text'],
+            marker=dict(
+                showscale=False,
+                colorscale='Viridis',
+                size=nodes_df['size'] * 3 + 5, # Scale size by degree
+                color=nodes_df['color'],
+                line_width=2,
+                opacity=0.8
+            ),
+            name="Accounts"
+        ))
+
+        fig_net.update_layout(
+            title='Network of Coordinated Accounts',
+            showlegend=True,
+            hovermode='closest',
+            margin=dict(b=20, l=5, r=5, t=40),
+            xaxis=dict(showgrid=False, zeroline=False, showticklabels=False),
+            yaxis=dict(showgrid=False, zeroline=False, showticklabels=False),
+            height=700
         )
 
-        # Create legend for platforms
-        legend_data = [
-            go.Scatter(
-                x=[None], y=[None],
-                mode='markers',
-                marker=dict(size=10, color=color),
-                legendgroup=platform,
-                name=platform
-            ) for platform, color in platform_to_color.items()
-        ]
+        st.plotly_chart(fig_net, use_container_width=True)
+
+        st.markdown("### Risk & Influence Assessment")
+        st.markdown("""
+        **Centrality Analysis**: Accounts with high centrality (many connections) are key nodes in the network, potentially acting as amplifiers or originators of a message.
+        - **Degree Centrality**: The number of connections a node has. High degree means an account is co-participating with many others.
+        """)
         
-        fig = go.Figure(
-            data=[edge_trace, node_trace] + legend_data,
-            layout=go.Layout(
-                title='<br>Network of Coordinated Accounts',
-                showlegend=True,
-                hovermode='closest',
-                margin=dict(b=20, l=5, r=5, t=40),
-                xaxis=dict(showgrid=False, zeroline=False, showticklabels=False),
-                yaxis=dict(showgrid=False, zeroline=False, showticklabels=False)
+        degree_centrality = nx.degree_centrality(G)
+        risk_df = pd.DataFrame(degree_centrality.items(), columns=['Account', 'Degree Centrality'])
+        risk_df = risk_df.sort_values(by='Degree Centrality', ascending=False).reset_index(drop=True)
+        risk_df['Risk Score'] = (risk_df['Degree Centrality'] / risk_df['Degree Centrality'].max()) * 100
+        risk_df = risk_df.merge(filtered_df_global[['account_id', 'Platform']].drop_duplicates(), left_on='Account', right_on='account_id', how='left').drop(columns='account_id')
+        risk_df = risk_df.head(20)
+
+        if not risk_df.empty:
+            st.markdown("#### Top 20 Most Central Accounts (by Degree Centrality)")
+            st.dataframe(risk_df, use_container_width=True)
+            
+            risk_csv = convert_df_to_csv(risk_df)
+            st.download_button(
+                "Download Risk Assessment CSV",
+                risk_csv,
+                "risk_assessment.csv",
+                "text/csv",
+                help="Downloads the list of accounts with their calculated risk scores."
             )
-        )
-        
-        st.plotly_chart(fig, use_container_width=True)
-        
-        st.markdown("### 🔍 Most Coordinated Accounts")
-        st.markdown("The accounts with the most connections are likely to be at the center of coordinated activity.")
-        
-        degrees = G.degree()
-        degrees_df = pd.DataFrame(degrees, columns=['Account', 'Degree']).sort_values('Degree', ascending=False)
-        degrees_df = degrees_df[degrees_df['Degree'] > 0]
-        
-        if not degrees_df.empty:
-            st.dataframe(degrees_df.head(10), use_container_width=True)
         else:
-            st.info("No coordination detected to rank accounts.")
+            st.warning("No network data available for risk assessment.")
