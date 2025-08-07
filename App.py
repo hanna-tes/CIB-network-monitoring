@@ -773,33 +773,38 @@ with tab3:
         You can analyze coordination based on shared text content or shared URLs to visualize how users are connected.
     """)
     st.subheader("🚨 High-Risk Accounts & Networks")
-    
+
+    # --- Clustering or URL Analysis ---
     if coordination_mode == "Text Content":
-    df_for_clustering = filtered_df_global[filtered_df_global['text'].astype(str).str.strip() != ""].copy()
-    if df_for_clustering.empty:
-        st.info("No valid text data for clustering analysis.")
-        clustered_df = pd.DataFrame()
-    else:
-        clustered_df = cached_clustering(df_for_clustering, data_source=data_source_type)
+        df_for_clustering = filtered_df_global[filtered_df_global['text'].astype(str).str.strip() != ""].copy()
+        if df_for_clustering.empty:
+            st.info("No valid text data for clustering analysis.")
+            clustered_df = pd.DataFrame()
+        else:
+            clustered_df = cached_clustering(df_for_clustering, data_source=data_source_type)
         
         if 'cluster' not in clustered_df.columns:
-            st.warning("⚠️ Clustering did not return 'cluster' column. Displaying unclustered data.")
-            clustered_df['cluster'] = "N/A"
-        
+            st.warning("⚠️ Clustering did not return 'cluster' column.")
+            clustered_df['cluster'] = -1
+
         if not clustered_df.empty:
             cluster_counts = clustered_df['cluster'].value_counts()
             if not cluster_counts.empty:
                 st.markdown("### 🤖 Detected Coordination Clusters")
                 fig_clust = px.bar(
-                    cluster_counts, title="Cluster Sizes", labels={'value': 'Member Count', 'index': 'Cluster ID'},
-                    color=cluster_counts.index.astype(str), color_discrete_sequence=px.colors.qualitative.Set3
+                    cluster_counts,
+                    title="Cluster Sizes",
+                    labels={'value': 'Member Count', 'index': 'Cluster ID'},
+                    color=cluster_counts.index.astype(str),
+                    color_discrete_sequence=px.colors.qualitative.Set3
                 )
                 st.plotly_chart(fig_clust, use_container_width=True)
                 st.dataframe(clustered_df[['Influencer', 'text', 'Timestamp', 'cluster']])
             else:
-                st.info("No clusters detected or no data available for clustering.")
+                st.info("No clusters detected.")
         else:
             st.info("No data available for clustering.")
+
     elif coordination_mode == "Shared URLs":
         url_groups = filtered_df_global.groupby('URL').filter(lambda x: len(x) > 1)
         if not url_groups.empty:
@@ -812,205 +817,124 @@ with tab3:
                 last_share=('Timestamp', 'max')
             ).sort_values('post_count', ascending=False).reset_index())
         else:
-            st.info("No URLs were shared by more than one account in the filtered dataset.")
-    
+            st.info("No URLs were shared by more than one account.")
+
+    # --- Network Graph ---
     st.markdown("### 🕸️ Coordinated Network Graph")
     MAX_NETWORK_NODES = st.slider(
         "Max nodes to display in network graph (for performance)",
-        10, 500, 100, key="max_network_nodes"
+        10, 500, 100,
+        key="max_network_nodes_tab3"
     )
+
+    G = nx.Graph()
+    filtered_df_for_graph = filtered_df_global.copy()
+
+    # Build graph based on coordination mode
     if coordination_mode == "Text Content":
         if 'clustered_df' in locals() and not clustered_df.empty:
             top_accounts = clustered_df['Influencer'].value_counts().head(MAX_NETWORK_NODES).index
             filtered_df_for_graph = clustered_df[clustered_df['Influencer'].isin(top_accounts)].copy()
             G, pos, cluster_map = cached_network_graph(filtered_df_for_graph, "text", data_source=data_source_type)
-            st.info(f"👥 Graph has {G.number_of_nodes()} nodes and {G.number_of_edges()} edges.")
-            if G.number_of_nodes() > 0:
-                # Remove isolated nodes
-                G.remove_nodes_from(list(nx.isolates(G)))
-                if G.number_of_nodes() == 0:
-                    st.info("No connected nodes after filtering isolates.")
-                else:
-                    # Recompute layout
-                    pos = nx.spring_layout(G, seed=42, k=0.7, iterations=100)
-
-                    # Node sizes
-                    node_weights = dict(G.degree(weight='weight'))
-                    min_size, max_size = 15, 50
-                    node_sizes = [
-                        min_size + (node_weights[n] - min(node_weights.values())) /
-                        (max(node_weights.values()) - min(node_weights.values()) + 1e-6) * (max_size - min_size)
-                        for n in G.nodes()
-                    ]
-
-                    # Colors
-                    colors = [cluster_map.get(n, -2) for n in G.nodes()]
-
-                    # Edge traces
-                    edge_x, edge_y = [], []
-                    for u, v in G.edges():
-                        x0, y0 = pos[u]
-                        x1, y1 = pos[v]
-                        edge_x += [x0, x1, None]
-                        edge_y += [y0, y1, None]
-                    edge_trace = go.Scatter(
-                        x=edge_x, y=edge_y,
-                        mode='lines',
-                        line=dict(width=0.8, color='#aaa'),
-                        hoverinfo='none',
-                        showlegend=False
-                    )
-
-                    # Node positions
-                    node_x = [pos[node][0] for node in G.nodes()]
-                    node_y = [pos[node][1] for node in G.nodes()]
-
-                    # Hover text
-                    node_text = [
-                        f"<b>{node}</b><br>"
-                        f"Connections: {G.degree(node)}<br>"
-                        f"Platform: {G.nodes[node].get('platform', 'Unknown')}<br>"
-                        f"Cluster: {G.nodes[node].get('cluster', 'N/A')}"
-                        for node in G.nodes()
-                    ]
-
-                    # Truncate labels
-                    node_labels = [n if len(n) <= 12 else n[:10] + "..." for n in G.nodes()]
-
-                    node_trace = go.Scatter(
-                        x=node_x,
-                        y=node_y,
-                        mode='markers+text',
-                        text=node_labels,
-                        textposition="top center",
-                        textfont=dict(size=10, color='black'),
-                        hoverinfo='text',
-                        hovertext=node_text,
-                        marker=dict(
-                            size=node_sizes,
-                            color=colors,
-                            colorscale='Plasma',
-                            showscale=True,
-                            colorbar=dict(title="Cluster ID", thickness=10, x=1.0, len=0.5),
-                            line=dict(width=1.5, color='white')
-                        ),
-                        showlegend=False
-                    )
-
-                    fig = go.Figure(
-                        data=[edge_trace, node_trace],
-                        layout=go.Layout(
-                            title=f"<b>{coordination_mode} Coordination Network</b><br><sup>{G.number_of_nodes()} nodes, {G.number_of_edges()} edges</sup>",
-                            titlefont=dict(size=14),
-                            showlegend=False,
-                            hovermode='closest',
-                            margin=dict(l=20, r=20, b=40, t=60),
-                            xaxis=dict(showgrid=False, zeroline=False, showticklabels=False),
-                            yaxis=dict(showgrid=False, zeroline=False, showticklabels=False),
-                            plot_bgcolor='white',
-                            height=600,
-                            width=None
-                        )
-                    )
-                    st.plotly_chart(fig, use_container_width=True)
-            else:
-                st.info("Not enough data to build a network graph.")
     elif coordination_mode == "Shared URLs":
         top_accounts = filtered_df_global['Influencer'].value_counts().head(MAX_NETWORK_NODES).index
         filtered_df_for_graph = filtered_df_global[filtered_df_global['Influencer'].isin(top_accounts)].copy()
         G, pos, cluster_map = cached_network_graph(filtered_df_for_graph, "url", data_source=data_source_type)
-        st.info(f"👥 Graph has {G.number_of_nodes()} nodes and {G.number_of_edges()} edges.")
-        if G.number_of_nodes() > 0:
-            # Remove isolated nodes
-            G.remove_nodes_from(list(nx.isolates(G)))
-            if G.number_of_nodes() == 0:
-                st.info("No connected nodes after filtering isolates.")
-            else:
-                # Recompute layout
-                pos = nx.spring_layout(G, seed=42, k=0.7, iterations=100)
 
-                # Node sizes
-                node_weights = dict(G.degree(weight='weight'))
-                min_size, max_size = 15, 50
-                node_sizes = [
-                    min_size + (node_weights[n] - min(node_weights.values())) /
-                    (max(node_weights.values()) - min(node_weights.values()) + 1e-6) * (max_size - min_size)
-                    for n in G.nodes()
-                ]
+    st.info(f"👥 Graph has {G.number_of_nodes()} nodes and {G.number_of_edges()} edges.")
 
-                # Colors
-                colors = [cluster_map.get(n, -2) for n in G.nodes()]
-
-                # Edge traces
-                edge_x, edge_y = [], []
-                for u, v in G.edges():
-                    x0, y0 = pos[u]
-                    x1, y1 = pos[v]
-                    edge_x += [x0, x1, None]
-                    edge_y += [y0, y1, None]
-                edge_trace = go.Scatter(
-                    x=edge_x, y=edge_y,
-                    mode='lines',
-                    line=dict(width=0.8, color='#aaa'),
-                    hoverinfo='none',
-                    showlegend=False
-                )
-
-                # Node positions
-                node_x = [pos[node][0] for node in G.nodes()]
-                node_y = [pos[node][1] for node in G.nodes()]
-
-                # Hover text
-                node_text = [
-                    f"<b>{node}</b><br>"
-                    f"Connections: {G.degree(node)}<br>"
-                    f"Platform: {G.nodes[node].get('platform', 'Unknown')}<br>"
-                    f"Cluster: {G.nodes[node].get('cluster', 'N/A')}"
-                    for node in G.nodes()
-                ]
-
-                # Truncate labels
-                node_labels = [n if len(n) <= 12 else n[:10] + "..." for n in G.nodes()]
-
-                node_trace = go.Scatter(
-                    x=node_x,
-                    y=node_y,
-                    mode='markers+text',
-                    text=node_labels,
-                    textposition="top center",
-                    textfont=dict(size=10, color='black'),
-                    hoverinfo='text',
-                    hovertext=node_text,
-                    marker=dict(
-                        size=node_sizes,
-                        color=colors,
-                        colorscale='Plasma',
-                        showscale=True,
-                        colorbar=dict(title="Cluster ID", thickness=10, x=1.0, len=0.5),
-                        line=dict(width=1.5, color='white')
-                    ),
-                    showlegend=False
-                )
-
-                fig = go.Figure(
-                    data=[edge_trace, node_trace],
-                    layout=go.Layout(
-                        title=f"<b>{coordination_mode} Coordination Network</b><br><sup>{G.number_of_nodes()} nodes, {G.number_of_edges()} edges</sup>",
-                        titlefont=dict(size=14),
-                        showlegend=False,
-                        hovermode='closest',
-                        margin=dict(l=20, r=20, b=40, t=60),
-                        xaxis=dict(showgrid=False, zeroline=False, showticklabels=False),
-                        yaxis=dict(showgrid=False, zeroline=False, showticklabels=False),
-                        plot_bgcolor='white',
-                        height=600,
-                        width=None
-                    )
-                )
-                st.plotly_chart(fig, use_container_width=True)
+    if G.number_of_nodes() == 0:
+        st.info("Not enough data to build a network graph.")
+    else:
+        # Remove isolated nodes
+        G.remove_nodes_from(list(nx.isolates(G)))
+        if G.number_of_nodes() == 0:
+            st.info("No connected nodes after filtering isolates.")
         else:
-            st.info("Not enough data to build a network graph.")
-    
+            # Recompute layout with better spacing
+            pos = nx.spring_layout(G, seed=42, k=0.7, iterations=100)
+
+            # Node sizes based on degree
+            node_weights = dict(G.degree(weight='weight'))
+            min_size, max_size = 15, 50
+            node_sizes = [
+                min_size + (node_weights[n] - min(node_weights.values())) /
+                (max(node_weights.values()) - min(node_weights.values()) + 1e-6) * (max_size - min_size)
+                for n in G.nodes()
+            ]
+
+            # Colors by cluster
+            colors = [cluster_map.get(n, -2) for n in G.nodes()]
+
+            # Edge traces
+            edge_x, edge_y = [], []
+            for u, v in G.edges():
+                x0, y0 = pos[u]
+                x1, y1 = pos[v]
+                edge_x += [x0, x1, None]
+                edge_y += [y0, y1, None]
+            edge_trace = go.Scatter(
+                x=edge_x, y=edge_y,
+                mode='lines',
+                line=dict(width=0.8, color='#aaa'),
+                hoverinfo='none',
+                showlegend=False
+            )
+
+            # Node positions
+            node_x = [pos[node][0] for node in G.nodes()]
+            node_y = [pos[node][1] for node in G.nodes()]
+
+            # Hover text
+            node_text = [
+                f"<b>{node}</b><br>"
+                f"Connections: {G.degree(node)}<br>"
+                f"Platform: {G.nodes[node].get('platform', 'Unknown')}<br>"
+                f"Cluster: {G.nodes[node].get('cluster', 'N/A')}"
+                for node in G.nodes()
+            ]
+
+            # Truncate labels for readability
+            node_labels = [n if len(n) <= 12 else n[:10] + "..." for n in G.nodes()]
+
+            node_trace = go.Scatter(
+                x=node_x,
+                y=node_y,
+                mode='markers+text',
+                text=node_labels,
+                textposition="top center",
+                textfont=dict(size=10, color='black'),
+                hoverinfo='text',
+                hovertext=node_text,
+                marker=dict(
+                    size=node_sizes,
+                    color=colors,
+                    colorscale='Plasma',
+                    showscale=True,
+                    colorbar=dict(title="Cluster ID", thickness=10, x=1.0, len=0.5),
+                    line=dict(width=1.5, color='white')
+                ),
+                showlegend=False
+            )
+
+            fig = go.Figure(
+                data=[edge_trace, node_trace],
+                layout=go.Layout(
+                    title=f"<b>{coordination_mode} Coordination Network</b><br><sup>{G.number_of_nodes()} nodes, {G.number_of_edges()} edges</sup>",
+                    titlefont=dict(size=14),
+                    showlegend=False,
+                    hovermode='closest',
+                    margin=dict(l=20, r=20, b=40, t=60),
+                    xaxis=dict(showgrid=False, zeroline=False, showticklabels=False),
+                    yaxis=dict(showgrid=False, zeroline=False, showticklabels=False),
+                    plot_bgcolor='white',
+                    height=600,
+                    width=None
+                )
+            )
+            st.plotly_chart(fig, use_container_width=True)
+
+    # --- High-Risk Influencers ---
     st.markdown("### ⚠️ High-Risk Influencers")
     try:
         if 'sim_df' in locals() and not sim_df.empty:
@@ -1022,9 +946,11 @@ with tab3:
             high_risk = influencer_counts[influencer_counts >= 3]
             if not high_risk.empty:
                 fig_hr = px.bar(
-                    high_risk, title="Influencers in ≥3 Coordinated Messages",
+                    high_risk,
+                    title="Influencers in ≥3 Coordinated Messages",
                     labels={'value': 'Coordination Instances', 'index': 'Influencer'},
-                    color='value', color_continuous_scale='Reds'
+                    color='value',
+                    color_continuous_scale='Reds'
                 )
                 st.plotly_chart(fig_hr, use_container_width=True)
             else:
