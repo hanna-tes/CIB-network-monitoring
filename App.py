@@ -582,10 +582,10 @@ with tab1:
         else:
             st.info("No 'Platform' column found or no data for platforms.")
 
-        if 'Channel' in filtered_df_global.columns:
-            top_channels = filtered_df_global['Channel'].value_counts().head(10)
-            fig_chan = px.bar(top_channels, title="Top 10 Channels", labels={'value': 'Posts', 'index': 'Channel'})
-            st.plotly_chart(fig_chan, use_container_width=True)
+        #if 'Channel' in filtered_df_global.columns:
+            #top_channels = filtered_df_global['Channel'].value_counts().head(10)
+            #fig_chan = px.bar(top_channels, title="Top 10 Channels", labels={'value': 'Posts', 'index': 'Channel'})
+            #st.plotly_chart(fig_chan, use_container_width=True)
 
         if 'text' in filtered_df_global.columns and not filtered_df_global['text'].empty:
             filtered_df_temp = filtered_df_global.copy()
@@ -631,7 +631,7 @@ with tab2:
             filtered_df_global['Platform'].isin(platforms_analysis)
         ].copy()
 
-        # 🔥 Keep only original tweets (no RT, QT, repost)
+        # 🔥 Keep only original tweets (no RT, QT, repost) — now 'object_id' exists
         original_df = analysis_df_filtered_by_platform[
             ~analysis_df_filtered_by_platform['object_id'].astype(str).str.startswith('RT @') &
             ~analysis_df_filtered_by_platform['object_id'].astype(str).str.startswith('qt @') &
@@ -739,7 +739,7 @@ with tab2:
             )
         else:
             st.info("No URLs were shared by more than one account in the filtered dataset.")
-
+            
 # ==================== TAB 3: Network & Risk ====================
 with tab3:
     st.header("🌐 Network & Risk")
