@@ -296,39 +296,41 @@ def find_coordinated_groups(df, threshold, max_features):
         
         for i in range(len(clean_df)):
             if i not in visited:
-                group = []
+                group_indices = []
                 q = [i]
                 visited.add(i)
                 while q:
                     u = q.pop(0)
-                    group.append(u)
+                    group_indices.append(u)
                     for v in adj[u]:
                         if v not in visited:
                             visited.add(v)
                             q.append(v)
                 
-                if len(group) > 1:
+                if len(group_indices) > 1:
                     # Collect all posts in this connected component
-                    group_posts = clean_df.iloc[group].copy()
+                    group_posts = clean_df.iloc[group_indices].copy()
                     
-                    # Determine a single representative snippet for the group
-                    representative_text = group_posts['text'].iloc[0]
-                    snippet = representative_text[:120] + ("..." if len(representative_text) > 120 else "")
+                    # --- FIX: Only consider a group coordinated if there are multiple unique accounts ---
+                    if len(group_posts['account_id'].unique()) > 1:
+                        # Determine a single representative snippet for the group
+                        representative_text = group_posts['text'].iloc[0]
+                        snippet = representative_text[:120] + ("..." if len(representative_text) > 120 else "")
 
-                    # Calculate max similarity in the group (for a score)
-                    group_sim_scores = cosine_sim[np.ix_(group, group)]
-                    max_sim = group_sim_scores.max() if group_sim_scores.size > 0 else 0.0
+                        # Calculate max similarity in the group (for a score)
+                        group_sim_scores = cosine_sim[np.ix_(group_indices, group_indices)]
+                        max_sim = group_sim_scores.max() if group_sim_scores.size > 0 else 0.0
 
-                    # Assign a unique ID and store the group data
-                    coordination_groups[f"group_{group_id_counter}"] = {
-                        "posts": group_posts.to_dict('records'),
-                        "num_posts": len(group_posts),
-                        "num_accounts": len(group_posts['account_id'].unique()),
-                        "shared_narrative_snippet": snippet,
-                        "max_similarity_score": round(max_sim, 3),
-                        "coordination_type": "TBD" # Will be set below
-                    }
-                    group_id_counter += 1
+                        # Assign a unique ID and store the group data
+                        coordination_groups[f"group_{group_id_counter}"] = {
+                            "posts": group_posts.to_dict('records'),
+                            "num_posts": len(group_posts),
+                            "num_accounts": len(group_posts['account_id'].unique()),
+                            "shared_narrative_snippet": snippet,
+                            "max_similarity_score": round(max_sim, 3),
+                            "coordination_type": "TBD" # Will be set below
+                        }
+                        group_id_counter += 1
 
     # Now, process groups to determine coordination type
     final_groups = []
