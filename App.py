@@ -590,7 +590,17 @@ with st.spinner("⏳ Preprocessing and mapping combined data..."):
 
 if df.empty:
     st.error("❌ No valid data after final preprocessing.")
+    # st.stop() # Removed st.stop() here as well
+    # --- Show some UI even if data is empty ---
+    tab1, tab2, tab3 = st.tabs(["📊 Overview", "🔍 Analysis", "🌐 Network & Risk"])
+    with tab1:
+        st.info("No data available to display in this tab.")
+    with tab2:
+        st.info("No data available to display in this tab.")
+    with tab3:
+        st.info("No data available to display in this tab.")
     st.stop()
+
 
 # --- Download Combined Data ---
 st.sidebar.markdown("### 💾 Download Combined & Preprocessed Data")
