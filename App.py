@@ -333,27 +333,6 @@ def find_coordinated_groups(df, threshold, max_features):
                     # --- CORE LOGIC FOR AMPLIFICATION: Only consider a group coordinated if there are multiple unique accounts ---
                     if len(group_posts['account_id'].unique()) > 1:
                         
-                        # --- MODIFIED: Generate a more meaningful narrative snippet ---
-                        # Extract all text from the group's posts
-                        all_group_texts = group_posts['text'].tolist()
-                        if all_group_texts:
-                            # Re-vectorize on the smaller group with ngrams
-                            narrative_vectorizer = TfidfVectorizer(
-                                stop_words='english',
-                                ngram_range=(2, 3), # Use bigrams and trigrams for better context
-                                max_features=10
-                            )
-                            narrative_matrix = narrative_vectorizer.fit_transform(all_group_texts)
-                            feature_names = narrative_vectorizer.get_feature_names_out()
-                            
-                            # Sum the TF-IDF scores for each feature to find the most important ones
-                            sums = narrative_matrix.sum(axis=0)
-                            top_feature_indices = sums.argsort()[:, ::-1][:, :5].tolist()[0]
-                            top_keywords = [feature_names[i] for i in top_feature_indices]
-                            representative_text = ", ".join(top_keywords) if top_keywords else "No clear narrative found."
-                        else:
-                            representative_text = "No clear narrative found."
-
                         # Calculate max similarity in the group (for a score)
                         group_sim_scores = cosine_sim[np.ix_(group_indices, group_indices)]
                         max_sim = group_sim_scores.max() if group_sim_scores.size > 0 else 0.0
@@ -363,7 +342,6 @@ def find_coordinated_groups(df, threshold, max_features):
                             "posts": group_posts.to_dict('records'),
                             "num_posts": len(group_posts),
                             "num_accounts": len(group_posts['account_id'].unique()),
-                            "shared_narrative_snippet": representative_text,
                             "max_similarity_score": round(max_sim, 3),
                             "coordination_type": "TBD" # Will be set below
                         }
@@ -892,7 +870,6 @@ with tab2:
                 
                 for i, group in enumerate(coordinated_groups):
                     st.markdown(f"#### Group {i+1}: {group['coordination_type']}")
-                    st.write(f"**Shared Narrative:** {group['shared_narrative_snippet']}")
                     st.write(f"**Number of Posts:** {group['num_posts']} | **Number of Unique Accounts:** {group['num_accounts']} | **Max Similarity:** {group['max_similarity_score']}")
                     
                     posts_df = pd.DataFrame(group['posts'])
@@ -908,7 +885,6 @@ with tab2:
                     {
                         'group_id': i,
                         'coordination_type': g['coordination_type'],
-                        'shared_narrative_snippet': g['shared_narrative_snippet'],
                         'max_similarity_score': g['max_similarity_score'],
                         **p
                     } for i, g in enumerate(coordinated_groups) for p in g['posts']
