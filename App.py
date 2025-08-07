@@ -251,15 +251,14 @@ def cluster_texts(df, eps, min_samples, max_features):
     df_copy['cluster'] = clustering.labels_
     return df_copy
 
-def find_similarities_in_clusters(df, threshold, max_features):
+def find_coordinated_groups(df, threshold, max_features):
     """
-    Detects highly similar text pairs by iterating through pre-clustered data.
-    This is much faster than an all-pairs comparison.
+    Groups highly similar posts into coordination groups for better analysis.
     """
     text_col = 'original_text'
     social_media_platforms = {'TikTok', 'Facebook', 'X', 'YouTube', 'Instagram', 'Telegram'}
     
-    similar_pairs = []
+    coordination_groups = {}
     
     clustered_groups = df[df['cluster'] != -1].groupby('cluster')
     
@@ -267,6 +266,7 @@ def find_similarities_in_clusters(df, threshold, max_features):
         if len(group) < 2:
             continue
             
+        # Use TF-IDF for similarity within the small cluster
         clean_df = group[['account_id', 'timestamp_share', 'Platform', 'URL', text_col]].copy()
         clean_df = clean_df.rename(columns={text_col: 'text', 'timestamp_share': 'Timestamp'})
         clean_df = clean_df.reset_index(drop=True)
@@ -280,69 +280,81 @@ def find_similarities_in_clusters(df, threshold, max_features):
             tfidf_matrix = vectorizer.fit_transform(clean_df['text'])
         except Exception:
             continue
-
-        sim_matrix = cosine_similarity(tfidf_matrix)
-        np.fill_diagonal(sim_matrix, 0)
-        sim_matrix = np.triu(sim_matrix, k=1)
-
-        idx_i, idx_j = np.where(sim_matrix >= threshold)
         
-        for i, j in zip(idx_i, idx_j):
-            row1 = clean_df.iloc[i]
-            row2 = clean_df.iloc[j]
-            
-            if row1['account_id'] == row2['account_id']:
-                continue
+        cosine_sim = cosine_similarity(tfidf_matrix)
+        
+        # Build an adjacency list for connected components
+        adj = {i: [] for i in range(len(clean_df))}
+        for i in range(len(clean_df)):
+            for j in range(i + 1, len(clean_df)):
+                if cosine_sim[i, j] >= threshold:
+                    adj[i].append(j)
+                    adj[j].append(i)
+                    
+        visited = set()
+        group_id_counter = 0
+        
+        for i in range(len(clean_df)):
+            if i not in visited:
+                group = []
+                q = [i]
+                visited.add(i)
+                while q:
+                    u = q.pop(0)
+                    group.append(u)
+                    for v in adj[u]:
+                        if v not in visited:
+                            visited.add(v)
+                            q.append(v)
                 
-            similarity = round(sim_matrix[i, j], 3)
-            
-            if similarity >= 0.98:
-                level = "🚨 Exact Copy / Bot-Level"
-            elif similarity >= 0.95:
-                level = "🔥 Near-Identical Coordination"
-            elif similarity >= 0.90:
-                level = "🟡 Highly Similar Messaging"
-            elif similarity >= 0.85:
-                level = "🟢 Loosely Similar"
-            else:
-                level = "⚪ Below Threshold"
+                if len(group) > 1:
+                    # Collect all posts in this connected component
+                    group_posts = clean_df.iloc[group].copy()
+                    group_posts['original_text_with_links'] = group.apply(lambda idx: group['text'][idx], axis=1) # Preserve full original text for snippet
+                    group_posts['source_cluster_id'] = cluster_id
+                    
+                    # Determine a single representative snippet for the group
+                    representative_text = group_posts['text'].iloc[0]
+                    snippet = representative_text[:120] + ("..." if len(representative_text) > 120 else "")
 
-            platform1_is_social = row1['Platform'] in social_media_platforms
-            platform2_is_social = row2['Platform'] in social_media_platforms
-            platform1_is_media = row1['Platform'] in {'News/Media', 'Media'}
-            platform2_is_media = row2['Platform'] in {'News/Media', 'Media'}
-            
-            if platform1_is_media and platform2_is_media:
-                coordination_type = "Syndication (Media Outlets)"
-            elif platform1_is_social and platform2_is_social:
-                coordination_type = "Coordinated Amplification (Social Media)"
-            elif (platform1_is_media and platform2_is_social) or (platform1_is_social and platform2_is_media):
-                coordination_type = "Media-to-Social Replication"
-            else:
-                coordination_type = "Other / Uncategorized"
-            
-            snippet = row1['text'][:120] + ("..." if len(row1['text']) > 120 else "")
+                    # Calculate max similarity in the group (for a score)
+                    group_sim_scores = cosine_sim[np.ix_(group, group)]
+                    max_sim = group_sim_scores.max() if group_sim_scores.size > 0 else 0.0
 
-            timestamp1_utc = pd.to_datetime(row1['Timestamp'], unit='s', utc=True).strftime('%Y-%m-%d %H:%M:%S UTC')
-            timestamp2_utc = pd.to_datetime(row2['Timestamp'], unit='s', utc=True).strftime('%Y-%m-%d %H:%M:%S UTC')
-            
-            similar_pairs.append({
-                'shared_narrative_snippet': snippet,
-                'similarity_score': similarity,
-                'similarity_level': level,
-                'coordination_type': coordination_type,
-                'account_id_1': row1['account_id'],
-                'platform_1': row1['Platform'],
-                'timestamp_1': timestamp1_utc,
-                'url_1': row1['URL'],
-                'account_id_2': row2['account_id'],
-                'platform_2': row2['Platform'],
-                'timestamp_2': timestamp2_utc,
-                'url_2': row2['URL'],
-                'platforms_involved': f"{row1['Platform']} ↔ {row2['Platform']}"
-            })
+                    # Assign a unique ID and store the group data
+                    coordination_groups[f"group_{group_id_counter}"] = {
+                        "posts": group_posts.to_dict('records'),
+                        "num_posts": len(group_posts),
+                        "num_accounts": len(group_posts['account_id'].unique()),
+                        "shared_narrative_snippet": snippet,
+                        "max_similarity_score": round(max_sim, 3),
+                        "coordination_type": "TBD" # Will be set below
+                    }
+                    group_id_counter += 1
 
-    return pd.DataFrame(similar_pairs)
+    # Now, process groups to determine coordination type
+    final_groups = []
+    for group_id, group_data in coordination_groups.items():
+        posts_df = pd.DataFrame(group_data['posts'])
+        platforms = posts_df['Platform'].unique()
+        
+        social_media_platforms_in_group = [p for p in platforms if p in social_media_platforms]
+        media_platforms_in_group = [p for p in platforms if p in {'News/Media', 'Media'}]
+
+        if len(media_platforms_in_group) > 1 and len(social_media_platforms_in_group) == 0:
+            coordination_type = "Syndication (Media Outlets)"
+        elif len(social_media_platforms_in_group) > 1 and len(media_platforms_in_group) == 0:
+            coordination_type = "Coordinated Amplification (Social Media)"
+        elif len(social_media_platforms_in_group) > 0 and len(media_platforms_in_group) > 0:
+            coordination_type = "Media-to-Social Replication"
+        else:
+            coordination_type = "Other / Uncategorized"
+        
+        group_data['coordination_type'] = coordination_type
+        final_groups.append(group_data)
+        
+    return final_groups
+
 
 def build_user_interaction_graph(df, coordination_type="text"):
     G = nx.Graph()
@@ -403,9 +415,9 @@ def build_user_interaction_graph(df, coordination_type="text"):
     return G, pos, cluster_map
 
 # --- Cached Functions ---
-@st.cache_data(show_spinner="🔍 Finding similar posts within clusters...")
-def cached_clustered_similarity_analysis(_df, threshold, max_features, data_source="default"):
-    return find_similarities_in_clusters(_df, threshold, max_features)
+@st.cache_data(show_spinner="🔍 Finding coordinated posts within clusters...")
+def cached_find_coordinated_groups(_df, threshold, max_features, data_source="default"):
+    return find_coordinated_groups(_df, threshold, max_features)
 
 @st.cache_data(show_spinner="🧩 Clustering texts...")
 def cached_clustering(_df, eps, min_samples, max_features, data_source="default"):
@@ -795,27 +807,43 @@ with tab2:
             clustered_df = cached_clustering(df_for_analysis, eps=eps, min_samples=min_samples, max_features=max_features, data_source=data_source + "_" + coordination_mode)
             
         with st.spinner("🕵️‍♂️ Finding similar posts within clusters..."):
-            similar_pairs_df = cached_clustered_similarity_analysis(clustered_df, threshold=threshold_sim, max_features=max_features, data_source=data_source + "_" + coordination_mode + "_" + str(threshold_sim))
+            coordinated_groups = cached_find_coordinated_groups(clustered_df, threshold=threshold_sim, max_features=max_features, data_source=data_source + "_" + coordination_mode + "_" + str(threshold_sim))
 
-        if not similar_pairs_df.empty:
-            st.info(f"✅ Found {len(similar_pairs_df)} pairs of posts with similarity score ≥ {threshold_sim:.2f}.")
+        if coordinated_groups:
+            st.info(f"✅ Found {len(coordinated_groups)} groups of posts with similarity score ≥ {threshold_sim:.2f}.")
 
             st.markdown("### Coordinated Amplification & Syndication Results")
-            display_cols = [
-                'coordination_type', 'shared_narrative_snippet', 'similarity_score', 'similarity_level', 
-                'account_id_1', 'platform_1', 'timestamp_1', 'url_1',
-                'account_id_2', 'platform_2', 'timestamp_2', 'url_2'
-            ]
-            st.dataframe(similar_pairs_df[display_cols].sort_values(by='similarity_score', ascending=False), height=500, use_container_width=True)
             
+            for i, group in enumerate(coordinated_groups):
+                st.markdown(f"#### Group {i+1}: {group['coordination_type']}")
+                st.write(f"**Shared Narrative:** {group['shared_narrative_snippet']}")
+                st.write(f"**Number of Posts:** {group['num_posts']} | **Number of Unique Accounts:** {group['num_accounts']} | **Max Similarity:** {group['max_similarity_score']}")
+                
+                posts_df = pd.DataFrame(group['posts'])
+                posts_df['first_timestamp'] = pd.to_datetime(posts_df['Timestamp'], unit='s', utc=True)
+                posts_df = posts_df.rename(columns={'account_id': 'Account ID', 'Platform': 'Platform', 'first_timestamp': 'Timestamp', 'URL': 'URL'})
+                posts_df = posts_df[['Account ID', 'Platform', 'Timestamp', 'URL']]
+                st.dataframe(posts_df, use_container_width=True)
+                st.markdown("---")
+
             # --- Download button for similar pairs ---
-            similar_pairs_csv = convert_df_to_csv(similar_pairs_df)
+            flat_groups = [
+                {
+                    'group_id': i,
+                    'coordination_type': g['coordination_type'],
+                    'shared_narrative_snippet': g['shared_narrative_snippet'],
+                    'max_similarity_score': g['max_similarity_score'],
+                    **p
+                } for i, g in enumerate(coordinated_groups) for p in g['posts']
+            ]
+            similar_groups_df = pd.DataFrame(flat_groups)
+            similar_groups_csv = convert_df_to_csv(similar_groups_df)
             st.download_button(
-                "Download Similar Pairs CSV",
-                similar_pairs_csv,
-                f"similar_posts_analysis_{threshold_sim}.csv",
+                "Download Coordinated Groups CSV",
+                similar_groups_csv,
+                f"coordinated_groups_analysis_{threshold_sim}.csv",
                 "text/csv",
-                help="Downloads the table of identified similar post pairs."
+                help="Downloads the table of identified coordinated post groups."
             )
 
         else:
@@ -911,12 +939,12 @@ with tab3:
             hover_text = f"User: {node}<br>Platform: {G.nodes[node].get('platform', 'N/A')}"
             node_text.append(hover_text)
             
-            # Use a consistent color for clusters, or gray for unclustered
+            # --- FIX: Check type before calling str methods ---
             cluster_id = cluster_map.get(node)
-            if cluster_id != -1 and cluster_id != -2 and not isinstance(cluster_id, str) and not cluster_id.startswith("SharedURL_Group"):
+            if isinstance(cluster_id, str):
+                node_color.append(cluster_id)
+            elif cluster_id not in [-1, -2]:
                 node_color.append(f"Cluster {cluster_id}")
-            elif isinstance(cluster_id, str):
-                 node_color.append(cluster_id)
             else:
                 node_color.append("No Coordination")
 
