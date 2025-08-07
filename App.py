@@ -414,9 +414,20 @@ def build_user_interaction_graph(df, coordination_type="text"):
             shared_urls = df[(df[influencer_column] == inf) & df['URL'].notna() & (df['URL'].str.strip() != '')]['URL'].unique()
             G.nodes[inf]['cluster'] = f"SharedURL_Group_{hash(tuple(sorted(shared_urls))) % 100}" if len(shared_urls) > 0 else "NoSharedURL"
 
-    pos = nx.spring_layout(G, seed=42, k=0.1, iterations=50)
-    cluster_map = {node: G.nodes[node].get('cluster', -2) for node in G.nodes()}
-    return G, pos, cluster_map
+    # --- New Logic: Filter nodes by degree centrality before layout ---
+    if G.nodes():
+        node_degrees = dict(G.degree())
+        sorted_nodes = sorted(node_degrees, key=node_degrees.get, reverse=True)
+        top_n_nodes = sorted_nodes[:st.session_state.max_nodes_to_display]
+        subgraph = G.subgraph(top_n_nodes)
+        
+        # Recalculate layout on the smaller subgraph
+        pos = nx.spring_layout(subgraph, seed=42, k=0.1, iterations=50)
+        cluster_map = {node: G.nodes[node].get('cluster', -2) for node in subgraph.nodes()}
+        return subgraph, pos, cluster_map
+    else:
+        return G, {}, {}
+
 
 # --- Cached Functions ---
 @st.cache_data(show_spinner="🔍 Finding coordinated posts within clusters...")
@@ -429,6 +440,8 @@ def cached_clustering(_df, eps, min_samples, max_features, data_source="default"
 
 @st.cache_data(show_spinner="🕸️ Building network graph...")
 def cached_network_graph(_df_for_graph, coordination_type="text", data_source="default"):
+    # This function is now a proxy and will call the main build_user_interaction_graph
+    # which will use the session state to get the max_nodes_to_display
     return build_user_interaction_graph(_df_for_graph, coordination_type)
 
 # --- Sidebar: Data Source & Coordination Mode ---
@@ -895,6 +908,18 @@ with tab2:
 # ==================== TAB 3: Network & Risk ====================
 with tab3:
     st.subheader("🕸️ Network Graph of Coordinated Activity")
+
+    # --- New Slider for Node Limiting ---
+    st.markdown("Use the slider below to limit the number of accounts displayed in the network graph.")
+    if 'max_nodes_to_display' not in st.session_state:
+        st.session_state.max_nodes_to_display = 40  # Default value
+    st.session_state.max_nodes_to_display = st.slider(
+        "Maximum Nodes to Display in Graph",
+        min_value=10, max_value=200, value=st.session_state.max_nodes_to_display, step=10,
+        help="Limit the graph to the top N most central accounts to improve visibility and focus on key influencers."
+    )
+    st.markdown("---") # Separator
+
     st.markdown("This visualization shows a network of accounts involved in coordinated activity. A link between two accounts means they posted similar content or shared the same URL.")
     
     # Decide which DataFrame to use for the graph based on coordination mode
@@ -908,6 +933,7 @@ with tab3:
         G = G_text
         pos = pos_text
         cluster_map = cluster_map_text
+        st.info(f"Displaying a network of the top {st.session_state.max_nodes_to_display} most connected accounts.")
         st.info("Nodes are accounts, colored by content cluster. Edges show co-participation in a cluster.")
 
     elif coordination_mode == "Shared URLs":
@@ -916,6 +942,7 @@ with tab3:
         G = G_url
         pos = pos_url
         cluster_map = cluster_map_url
+        st.info(f"Displaying a network of the top {st.session_state.max_nodes_to_display} most connected accounts.")
         st.info("Nodes are accounts, colored by a grouping of shared URLs. Edges show co-sharing of URLs.")
 
     if not G.nodes():
