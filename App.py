@@ -196,7 +196,7 @@ def final_preprocess_and_map_columns(df, coordination_mode="Text Content"):
     df_processed['Platform'] = df_processed['URL'].apply(infer_platform_from_url)
     # Map to old column names for existing visuals
     df_processed.rename(columns={'account_id': 'Influencer'}, inplace=True)
-    df_processed.rename(columns={'object_id': 'text'}, inplace=True)
+    #df_processed.rename(columns={'object_id': 'text'}, inplace=True)
     df_processed.rename(columns={'timestamp_share': 'Timestamp'}, inplace=True)
     
     if 'Outlet' not in df_processed.columns:
@@ -567,6 +567,28 @@ tab1, tab2, tab3 = st.tabs([
 # ==================== TAB 1: Overview ====================
 with tab1:
     st.subheader("📌 Summary Statistics")
+    
+    # === Show Core Semantic Data Preview ===
+    st.markdown("### 🔬 Core Data Preview (Raw Semantic Columns)")
+    st.markdown(f"**Data Source:** `{data_source_option}` | **Coordination Mode:** `{coordination_mode}` | **Total Rows:** `{len(combined_raw_df):,}`")
+    
+    # Define core columns
+    core_columns = ['account_id', 'content_id', 'object_id', 'timestamp_share']
+    available_core_cols = [col for col in core_columns if col in combined_raw_df.columns]
+    
+    if not combined_raw_df.empty and available_core_cols:
+        # Show top 10 rows of core columns
+        st.dataframe(combined_raw_df[available_core_cols].head(10), height=300)
+    else:
+        st.info("No core data available to display (account_id, content_id, object_id, timestamp_share).")
+
+    # Optional: Show source dataset distribution
+    if 'source_dataset' in combined_raw_df.columns:
+        st.markdown("### 📊 Data Sources")
+        source_counts = combined_raw_df['source_dataset'].value_counts()
+        st.dataframe(source_counts)
+
+    # === Aggregated Visuals (after preprocessing) ===
     if not filtered_df_global.empty:
         if 'Influencer' in filtered_df_global.columns:
             top_influencers = filtered_df_global['Influencer'].value_counts().head(10)
@@ -581,11 +603,6 @@ with tab1:
             st.plotly_chart(fig_platform, use_container_width=True)
         else:
             st.info("No 'Platform' column found or no data for platforms.")
-
-        #if 'Channel' in filtered_df_global.columns:
-            #top_channels = filtered_df_global['Channel'].value_counts().head(10)
-            #fig_chan = px.bar(top_channels, title="Top 10 Channels", labels={'value': 'Posts', 'index': 'Channel'})
-            #st.plotly_chart(fig_chan, use_container_width=True)
 
         if 'text' in filtered_df_global.columns and not filtered_df_global['text'].empty:
             filtered_df_temp = filtered_df_global.copy()
@@ -605,7 +622,7 @@ with tab1:
         st.plotly_chart(fig_ts, use_container_width=True)
     else:
         st.info("No data available to display summary statistics.")
-
+        
 # ==================== TAB 2: Similarity & Coordination ====================
 with tab2:
     st.subheader("🧠 Narrative Detection & Coordination")
@@ -631,7 +648,8 @@ with tab2:
             filtered_df_global['Platform'].isin(platforms_analysis)
         ].copy()
 
-        # 🔥 Keep only original tweets (no RT, QT, repost) — now 'object_id' exists
+        # 🔥 Keep only original tweets (no RT, QT, repost)
+        # Now 'object_id' still exists
         original_df = analysis_df_filtered_by_platform[
             ~analysis_df_filtered_by_platform['object_id'].astype(str).str.startswith('RT @') &
             ~analysis_df_filtered_by_platform['object_id'].astype(str).str.startswith('qt @') &
