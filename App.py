@@ -819,14 +819,13 @@ if not sim_df.empty:
                     
 # ==================== TAB 3: Network & Risk ====================
 with tab3:
-    st.header("🌐 Network & Risk")
-    st.markdown("""
-        This section provides an in-depth look at the network of user interactions and identifies potential risks. 
-        You can analyze coordination based on shared text content or shared URLs to visualize how users are connected.
-    """)
-    st.subheader("🚨 High-Risk Accounts & Networks")
+    st.subheader("🌐 Network Analysis & Risk Scoring")
+    st.markdown(f"**Current Mode:** Analyzing coordination by **{coordination_mode}**")
+    st.markdown("---")
 
-    # --- Clustering or URL Analysis ---
+    st.markdown("### 🧩 Clusters & Narratives")
+    st.caption("Identifies groups of users posting similar content (text or URLs) at a similar time.")
+
     if coordination_mode == "Text Content":
         df_for_clustering = filtered_df_global[filtered_df_global['text'].astype(str).str.strip() != ""].copy()
         if df_for_clustering.empty:
@@ -834,10 +833,9 @@ with tab3:
             clustered_df = pd.DataFrame()
         else:
             clustered_df = cached_clustering(df_for_clustering, data_source=data_source_type)
-        
-        if 'cluster' not in clustered_df.columns:
-            st.warning("⚠️ Clustering did not return 'cluster' column.")
-            clustered_df['cluster'] = -1
+            if 'cluster' not in clustered_df.columns:
+                st.warning("⚠️ Clustering did not return 'cluster' column.")
+                clustered_df['cluster'] = -1
 
         if not clustered_df.empty:
             cluster_counts = clustered_df['cluster'].value_counts()
@@ -861,52 +859,52 @@ with tab3:
         url_groups = filtered_df_global.groupby('URL').filter(lambda x: len(x) > 1)
         if not url_groups.empty:
             st.success(f"✅ Found {url_groups['URL'].nunique()} URLs shared by multiple accounts.")
-            st.dataframe(url_groups.groupby('URL').agg(
-                post_count=('Influencer', 'size'),
-                accounts_involved=('Influencer', lambda x: ', '.join(x.unique())),
-                platforms_involved=('Platform', lambda x: ', '.join(x.unique())),
-                first_share=('Timestamp', 'min'),
-                last_share=('Timestamp', 'max')
-            ).sort_values('post_count', ascending=False).reset_index())
+            url_summary = url_groups.groupby('URL').agg(
+                share_count=('Influencer', 'size'),
+                unique_accounts=('Influencer', 'nunique'),
+                platforms=('Platform', lambda x: ', '.join(x.unique())),
+                first_seen=('Timestamp', 'min'),
+                last_seen=('Timestamp', 'max')
+            ).sort_values('share_count', ascending=False).head(10)
+            st.dataframe(url_summary)
         else:
-            st.info("No URLs were shared by more than one account.")
+            st.info("No URLs were shared by multiple accounts.")
 
     # --- Network Graph ---
     st.markdown("### 🕸️ Coordinated Network Graph")
-    MAX_NETWORK_NODES = st.slider(
-        "Max nodes to display in network graph (for performance)",
-        10, 500, 100,
-        key="max_network_nodes_tab3"
+    MAX_NODES = st.slider(
+        "Max influential nodes to display",
+        min_value=10, max_value=200, value=80,
+        help="Limits graph to top accounts by activity to improve clarity."
     )
 
     G = nx.Graph()
     filtered_df_for_graph = filtered_df_global.copy()
 
-    # Build graph based on coordination mode
-    if coordination_mode == "Text Content":
-        if 'clustered_df' in locals() and not clustered_df.empty:
-            top_accounts = clustered_df['Influencer'].value_counts().head(MAX_NETWORK_NODES).index
-            filtered_df_for_graph = clustered_df[clustered_df['Influencer'].isin(top_accounts)].copy()
-            G, pos, cluster_map = cached_network_graph(filtered_df_for_graph, "text", data_source=data_source_type)
+    if coordination_mode == "Text Content" and 'clustered_df' in locals():
+        top_accounts = clustered_df['Influencer'].value_counts().head(MAX_NODES).index
+        filtered_df_for_graph = clustered_df[clustered_df['Influencer'].isin(top_accounts)]
+        G, pos, cluster_map = cached_network_graph(filtered_df_for_graph, "text", data_source=data_source_type)
     elif coordination_mode == "Shared URLs":
-        top_accounts = filtered_df_global['Influencer'].value_counts().head(MAX_NETWORK_NODES).index
-        filtered_df_for_graph = filtered_df_global[filtered_df_global['Influencer'].isin(top_accounts)].copy()
+        top_accounts = filtered_df_global['Influencer'].value_counts().head(MAX_NODES).index
+        filtered_df_for_graph = filtered_df_global[filtered_df_global['Influencer'].isin(top_accounts)]
         G, pos, cluster_map = cached_network_graph(filtered_df_for_graph, "url", data_source=data_source_type)
-
-    st.info(f"👥 Graph has {G.number_of_nodes()} nodes and {G.number_of_edges()} edges.")
+    else:
+        st.info("No data available for network graph.")
+        G = nx.Graph()
 
     if G.number_of_nodes() == 0:
-        st.info("Not enough data to build a network graph.")
+        st.info("No network connections to display.")
     else:
         # Remove isolated nodes
         G.remove_nodes_from(list(nx.isolates(G)))
         if G.number_of_nodes() == 0:
             st.info("No connected nodes after filtering isolates.")
         else:
-            # Recompute layout with better spacing
+            # Recompute layout
             pos = nx.spring_layout(G, seed=42, k=0.7, iterations=100)
 
-            # Node sizes based on degree
+            # Node sizes
             node_weights = dict(G.degree(weight='weight'))
             min_size, max_size = 15, 50
             node_sizes = [
@@ -915,7 +913,7 @@ with tab3:
                 for n in G.nodes()
             ]
 
-            # Colors by cluster
+            # Colors
             colors = [cluster_map.get(n, -2) for n in G.nodes()]
 
             # Edge traces
@@ -946,7 +944,7 @@ with tab3:
                 for node in G.nodes()
             ]
 
-            # Truncate labels for readability
+            # Truncate labels
             node_labels = [n if len(n) <= 12 else n[:10] + "..." for n in G.nodes()]
 
             node_trace = go.Scatter(
@@ -999,15 +997,15 @@ with tab3:
             if not high_risk.empty:
                 fig_hr = px.bar(
                     high_risk,
-                    title="Influencers in ≥3 Coordinated Messages",
-                    labels={'value': 'Coordination Instances', 'index': 'Influencer'},
+                    title="Top Influencers in ≥3 Coordinated Pairs",
+                    labels={'value': 'Coordination Count', 'index': 'Influencer'},
                     color='value',
                     color_continuous_scale='Reds'
                 )
                 st.plotly_chart(fig_hr, use_container_width=True)
             else:
-                st.info("No influencers found participating in 3 or more coordinated messages.")
+                st.info("No influencer involved in 3+ coordinated messages.")
         else:
-            st.info("No coordinated narratives detected to identify high-risk influencers.")
+            st.info("No coordinated narratives detected.")
     except Exception as e:
-        st.warning(f"Risk analysis failed: {e}")
+        st.warning(f"Could not compute risk scores: {e}")
