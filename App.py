@@ -421,8 +421,10 @@ def build_user_interaction_graph(df, coordination_type="text"):
         top_n_nodes = sorted_nodes[:st.session_state.max_nodes_to_display]
         subgraph = G.subgraph(top_n_nodes)
         
-        # Recalculate layout on the smaller subgraph
-        pos = nx.spring_layout(subgraph, seed=42, k=0.1, iterations=50)
+        # --- MODIFIED: Use a different layout for a more organized look ---
+        # Changed from nx.spring_layout to nx.kamada_kawai_layout
+        # Kamada-Kawai layout is often better for aesthetic graphs
+        pos = nx.kamada_kawai_layout(subgraph)
         cluster_map = {node: G.nodes[node].get('cluster', -2) for node in subgraph.nodes()}
         return subgraph, pos, cluster_map
     else:
@@ -999,6 +1001,7 @@ with tab3:
         })
 
         # Add nodes as markers
+        # --- MODIFIED: Adjust node size scaling ---
         fig_net.add_trace(go.Scatter(
             x=nodes_df['x'],
             y=nodes_df['y'],
@@ -1008,7 +1011,7 @@ with tab3:
             marker=dict(
                 showscale=False, # Set to True if you want a color bar legend
                 colorscale='Viridis', # Use a sequential or qualitative colorscale
-                size=nodes_df['size'] * 3 + 5, # Scale size by degree
+                size=nodes_df['size'] * 1.5 + 5, # Less aggressive scaling
                 color=nodes_df['color'], # Use the numerical color
                 line_width=2,
                 opacity=0.8
