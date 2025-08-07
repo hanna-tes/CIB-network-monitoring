@@ -375,11 +375,17 @@ def find_textual_similarities(df, threshold=0.85):
         # Determine coordination type based on platforms
         platform1_is_social = row1['Platform'] in social_media_platforms
         platform2_is_social = row2['Platform'] in social_media_platforms
+        platform1_is_media = row1['Platform'] in {'News/Media', 'Media'}
+        platform2_is_media = row2['Platform'] in {'News/Media', 'Media'}
         
-        if platform1_is_social and platform2_is_social:
+        if platform1_is_media and platform2_is_media:
+            coordination_type = "Syndication (Media Outlets)"
+        elif platform1_is_social and platform2_is_social:
             coordination_type = "Coordinated Amplification (Social Media)"
+        elif (platform1_is_media and platform2_is_social) or (platform1_is_social and platform2_is_media):
+            coordination_type = "Media-to-Social Replication"
         else:
-            coordination_type = "Syndication (Media Posts)"
+            coordination_type = "Other / Uncategorized"
         
         snippet = row1['text'][:120] + ("..." if len(row1['text']) > 120 else "")
 
@@ -606,6 +612,27 @@ filtered_df_global = df[
     (df['Platform'].isin(df['Platform'].dropna().unique()))
 ].copy()
 
+# Add new control to limit posts
+st.sidebar.markdown("---")
+st.sidebar.subheader("⏩ Performance Controls")
+max_posts_for_analysis = st.sidebar.number_input(
+    "Limit Posts for Analysis (0 for all)",
+    min_value=0,
+    value=0,
+    step=1000,
+    help="To speed up analysis on large datasets, enter a number to process a random sample of posts. Set to 0 to use all posts."
+)
+st.sidebar.markdown(f"**Filtered Posts:** `{len(filtered_df_global):,}`")
+
+# Apply sampling if requested
+if max_posts_for_analysis > 0 and len(filtered_df_global) > max_posts_for_analysis:
+    df_for_analysis = filtered_df_global.sample(n=max_posts_for_analysis, random_state=42).copy()
+    st.sidebar.warning(f"⚠️ Analyzing a random sample of **{len(df_for_analysis):,}** posts to improve performance.")
+else:
+    df_for_analysis = filtered_df_global.copy()
+    st.sidebar.info(f"✅ Analyzing all **{len(df_for_analysis):,}** posts.")
+
+
 if filtered_df_global.empty:
     st.warning("No data matches the selected filters.")
     st.stop()
@@ -702,16 +729,59 @@ with tab2:
     st.subheader("🕵️‍♀️ Similarity & Coordination Analysis")
     st.markdown("""
         This section identifies coordinated activities by analyzing posts with high textual similarity.
-        - **Coordinated Amplification**: Posts on social media platforms that are highly similar in text, suggesting a coordinated effort to spread a message.
-        - **Syndication**: Highly similar posts where at least one post originates from a news or media outlet, suggesting media content is being replicated on social platforms.
     """)
+    
+    # --- Repost/Replication Count Table (New Section) ---
+    st.subheader("🔄 Repost & Replication Count")
+    st.markdown("This table shows content that has been reposted or replicated across different accounts, providing a direct count of identical posts.")
+
+    if coordination_mode == "Text Content":
+        with st.spinner("🔢 Counting reposts and replications..."):
+            repost_counts = df_for_analysis.groupby('original_text').filter(lambda x: len(x) > 1).groupby('original_text').agg(
+                repost_count=('account_id', 'size'),
+                first_account_id=('account_id', 'first'),
+                first_platform=('Platform', 'first'),
+                first_timestamp=('timestamp_share', 'first'),
+                first_url=('URL', 'first')
+            ).reset_index()
+
+            if not repost_counts.empty:
+                repost_counts = repost_counts.rename(columns={'original_text': 'original_content'})
+                repost_counts['first_timestamp'] = pd.to_datetime(repost_counts['first_timestamp'], unit='s', utc=True)
+                repost_counts = repost_counts.sort_values('repost_count', ascending=False)
+                
+                display_cols = ['repost_count', 'original_content', 'first_account_id', 'first_platform', 'first_timestamp', 'first_url']
+                st.info(f"✅ Found {len(repost_counts)} unique pieces of content with 2 or more reposts.")
+                st.dataframe(repost_counts[display_cols].head(20), height=500, use_container_width=True)
+                
+                repost_counts_csv = convert_df_to_csv(repost_counts)
+                st.download_button(
+                    "Download Repost Count CSV",
+                    repost_counts_csv,
+                    "repost_counts.csv",
+                    "text/csv",
+                    help="Downloads the list of content and their repost counts."
+                )
+            else:
+                st.info("No exact reposts or replications found in the selected data.")
+    else:
+        st.info("Repost count is only available when 'Text Content' is selected as the coordination mode.")
+
+    st.markdown("---") # Separator for the next section
 
     if coordination_mode == "Text Content":
         st.subheader("Textual Similarity Analysis")
+        st.markdown("""
+            - **Syndication**: When a content shared by one media outlet is replicated by other media outlets word-for-word.
+            - **Coordinated Amplification**: When highly similar posts are shared by different accounts on social media platforms.
+            - **Media-to-Social Replication**: When content from a media outlet is replicated on a social media platform.
+        """)
+
         threshold_sim = st.slider("Similarity Threshold", min_value=0.75, max_value=0.99, value=0.90, step=0.01)
         
+        # Use df_for_analysis
         with st.spinner("🕵️‍♂️ Finding similar posts..."):
-            similar_pairs_df = cached_similarity_analysis(filtered_df_global, threshold=threshold_sim, data_source=data_source + "_" + coordination_mode + "_" + str(threshold_sim))
+            similar_pairs_df = cached_similarity_analysis(df_for_analysis, threshold=threshold_sim, data_source=data_source + "_" + coordination_mode + "_" + str(threshold_sim))
 
         if not similar_pairs_df.empty:
             st.info(f"✅ Found {len(similar_pairs_df)} pairs of posts with similarity score ≥ {threshold_sim:.2f}.")
@@ -740,9 +810,9 @@ with tab2:
     elif coordination_mode == "Shared URLs":
         st.subheader("Shared URLs Analysis")
         with st.spinner("🔗 Finding posts that share the same URLs..."):
-            shared_url_df = filtered_df_global[
-                filtered_df_global['URL'].notna() &
-                (filtered_df_global['URL'].str.strip() != "")
+            shared_url_df = df_for_analysis[  # Use df_for_analysis
+                df_for_analysis['URL'].notna() &
+                (df_for_analysis['URL'].str.strip() != "")
             ].copy()
             if not shared_url_df.empty:
                 url_counts = shared_url_df['URL'].value_counts()
@@ -774,8 +844,9 @@ with tab3:
     st.markdown("This visualization shows a network of accounts involved in coordinated activity. A link between two accounts means they posted similar content or shared the same URL.")
     
     # Decide which DataFrame to use for the graph based on coordination mode
+    # Use df_for_analysis for both network graph modes
     if coordination_mode == "Text Content":
-        df_for_graph = filtered_df_global
+        df_for_graph = df_for_analysis
         with st.spinner("🗂️ Pre-processing data for network graph..."):
             df_for_graph = cached_clustering(df_for_graph, data_source=data_source + "_" + coordination_mode)
         
@@ -786,7 +857,7 @@ with tab3:
         st.info("Nodes are accounts, colored by content cluster. Edges show co-participation in a cluster.")
 
     elif coordination_mode == "Shared URLs":
-        df_for_graph = filtered_df_global
+        df_for_graph = df_for_analysis
         G_url, pos_url, cluster_map_url = cached_network_graph(df_for_graph, coordination_type="url", data_source=data_source + "_" + coordination_mode)
         G = G_url
         pos = pos_url
