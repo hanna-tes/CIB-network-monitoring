@@ -316,7 +316,7 @@ def find_textual_similarities(df, threshold=0.85):
     text_col = 'original_text' if 'original_text' in df.columns else 'text'
     clean_df = df[['account_id', 'Timestamp', 'Platform', 'URL', text_col]].copy()
     clean_df = clean_df.rename(columns={text_col: 'text'})
-    
+
     # Clean and filter
     clean_df['text'] = clean_df['text'].astype(str).str.strip()
     clean_df = clean_df[
@@ -324,7 +324,7 @@ def find_textual_similarities(df, threshold=0.85):
         (clean_df['text'] != "") &
         (clean_df['text'].str.lower() != "nan")
     ].copy()
-    
+
     if len(clean_df) < 2:
         return pd.DataFrame()
 
@@ -353,16 +353,16 @@ def find_textual_similarities(df, threshold=0.85):
         if key in seen:
             continue
         seen.add(key)
-        
+
         row1 = clean_df.iloc[i]
         row2 = clean_df.iloc[j]
-        
+
         # Skip if same account
         if row1['account_id'] == row2['account_id']:
             continue
-            
+
         similarity = round(sim_matrix[i, j], 3)
-        
+
         # Label similarity level
         if similarity >= 0.98:
             level = "🚨 Exact Copy / Bot-Level"
@@ -723,8 +723,21 @@ with tab2:
             if st.button("Run Text Similarity Analysis"):
                 similarities = cached_similarity_analysis(analysis_df, threshold=similarity_threshold, data_source=f"{data_source}_{coordination_mode}")
                 if not similarities.empty:
-                    st.success(f"✅ Found {len(similarities)} similar text pairs.")
-                    st.dataframe(similarities, use_container_width=True)
+                    # Filter for scores > 0.95 as requested
+                    high_similarity_df = similarities[similarities['similarity_score'] > 0.95].copy()
+                    if not high_similarity_df.empty:
+                        # Add a new column for coordination type based on platform
+                        def get_coordination_type(platforms_involved):
+                            if "News/Media" in platforms_involved or "Media" in platforms_involved:
+                                return "Syndication (Media Post)"
+                            return "Coordinated Amplification (Social)"
+                        
+                        high_similarity_df['Coordination Type'] = high_similarity_df['platforms_involved'].apply(get_coordination_type)
+                        
+                        st.success(f"✅ Found {len(high_similarity_df)} highly similar pairs (score > 0.95).")
+                        st.dataframe(high_similarity_df, use_container_width=True)
+                    else:
+                        st.info("No highly similar text pairs found with a score greater than 0.95.")
                 else:
                     st.info("No similar text pairs found above the selected threshold.")
 
