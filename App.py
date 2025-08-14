@@ -12,12 +12,37 @@ from sklearn.cluster import DBSCAN
 from itertools import combinations
 import re
 from io import StringIO
-from collections import Counter
 import tldextract
 
 # --- Set Page Config ---
 st.set_page_config(page_title="Humanitarian Campaign Monitor", layout="wide")
 st.title("🕊️ Humanitarian Campaign Monitoring Dashboard")
+
+# --- Add Background Image ---
+def add_bg_image():
+    st.markdown(
+        """
+        <style>
+        .stApp {
+            background-image: url("https://images.unsplash.com/photo-1517245386807-bb43f82c33c4?ixlib=rb-4.0.3&ixid=M3wxMjA3fDB8MHxwaG90by1wYWdlfHx8fGVufDB8fHx8fA%3D%3D&auto=format&fit=crop&w=1200&q=80");
+            background-attachment: fixed;
+            background-size: cover;
+            background-position: center;
+            color: white;
+        }
+        .css-1d391kg {  /* Title color */
+            color: white !important;
+            text-shadow: 2px 2px 4px #000;
+        }
+        .stSidebar .css-1v3fvcr {
+            background-color: rgba(255, 255, 255, 0.9);
+        }
+        </style>
+        """,
+        unsafe_allow_html=True
+    )
+
+add_bg_image()
 
 # --- Define the 6 key phrases to track ---
 PHRASES_TO_TRACK = [
@@ -76,7 +101,7 @@ def extract_all_urls(text):
     if pd.isna(text) or not isinstance(text, str): return []
     return re.findall(r'https?://\S+', text)
 
-# --- Combine Multiple Datasets with Flexible Column Mapping ---
+# --- Combine Datasets with Flexible Column Mapping ---
 def combine_social_media_data(
     meltwater_df=None,
     civicsignals_df=None,
@@ -85,13 +110,7 @@ def combine_social_media_data(
     civicsignals_object_col='title',
     openmeasure_object_col='text'
 ):
-    """
-    Combines datasets from Meltwater, CivicSignals, and Open-Measure.
-    Handles case-insensitive column names and common variations.
-    Returns a unified DataFrame with standardized core columns.
-    """
     combined_dfs = []
-
     def get_col(df, possible_names, default=None):
         if df is None or df.empty: return pd.Series([], dtype='object')
         for name in possible_names:
@@ -105,11 +124,10 @@ def combine_social_media_data(
         mw = pd.DataFrame()
         mw['account_id'] = get_col(meltwater_df, ['influencer', 'Author', 'author', 'User'], 'Unknown_User')
         mw['content_id'] = get_col(meltwater_df, ['tweet id', 'Post ID', 'post_id', 'id'], 'Unknown_ID')
-        mw['object_id'] = get_col(meltwater_df, [meltwater_object_col, 'Content', 'content', 'Text', 'text'], '')
+        mw['object_id'] = get_col(meltwater_df, [meltwater_object_col, 'Content', 'content', 'Text'], '')
         mw['URL'] = get_col(meltwater_df, ['url', 'URL', 'Link', 'link'], '')
         mw['timestamp_share'] = get_col(meltwater_df, ['date', 'Published Date', 'publish_date', 'Date', 'created_at'], None)
         mw['source_dataset'] = 'Meltwater'
-        mw['original_row'] = meltwater_df.to_dict('records')  # Preserve all original data
         combined_dfs.append(mw)
 
     # Process CivicSignals
@@ -121,7 +139,6 @@ def combine_social_media_data(
         cs['URL'] = get_col(civicsignals_df, ['url', 'URL', 'Story URL'], '')
         cs['timestamp_share'] = get_col(civicsignals_df, ['publish_date', 'date', 'Date'], None)
         cs['source_dataset'] = 'CivicSignals'
-        cs['original_row'] = civicsignals_df.to_dict('records')
         combined_dfs.append(cs)
 
     # Process Open-Measure
@@ -133,7 +150,6 @@ def combine_social_media_data(
         om['URL'] = get_col(openmeasure_df, ['url', 'link'], '')
         om['timestamp_share'] = get_col(openmeasure_df, ['created_at', 'date', 'timestamp'], None)
         om['source_dataset'] = 'OpenMeasure'
-        om['original_row'] = openmeasure_df.to_dict('records')
         combined_dfs.append(om)
 
     if not combined_dfs:
@@ -147,7 +163,6 @@ def combine_social_media_data(
     combined['object_id'] = combined['object_id'].astype(str).replace('nan', '').fillna('')
     combined['timestamp_share'] = combined['timestamp_share'].apply(parse_timestamp_robust)
     combined = combined.dropna(subset=['timestamp_share']).reset_index(drop=True)
-    combined['object_id'] = combined['object_id'].astype(str).replace('nan', '').fillna('')
     combined = combined[combined['object_id'].str.strip() != ""].copy()
     return combined
 
@@ -171,8 +186,8 @@ def final_preprocess_and_map_columns(df):
         return "Other"
     df_processed['assigned_phrase'] = df_processed['original_text'].apply(assign_phrase)
 
-    # Separate core analysis columns from full metadata
-    core_columns = ['account_id', 'content_id', 'object_id', 'original_text', 'timestamp_share', 'Platform', 'extracted_urls', 'assigned_phrase']
+    # Core columns for analysis
+    core_columns = ['account_id', 'content_id', 'object_id', 'original_text', 'timestamp_share']
     core_df = df_processed[core_columns].copy()
     other_df = df_processed.drop(columns=core_columns, errors='ignore').copy()
 
@@ -383,19 +398,19 @@ else:
     df_for_analysis = pd.DataFrame()
 
 # --- Tabs ---
-tab1, tab2, tab3 = st.tabs(["📊 Overview", "🔍 Similarity & Coordination", "💰 Suspicious Fundraising"])
+tab1, tab2, tab3 = st.tabs(["📊 Overview", "🔍 Similarity & Coordination", "🌐 Network & Risk"])
 
 # ==================== TAB 1: Overview ====================
 with tab1:
     st.subheader("📌 Overview of Combined Data")
 
     if not st.session_state.core_df.empty:
-        st.markdown("### 📋 Raw Data Sample (First 10 Rows)")
-        st.dataframe(st.session_state.core_df.head(10), use_container_width=True)
+        # Convert timestamp to UTC for display
+        display_df = st.session_state.core_df.copy()
+        display_df['date_utc'] = pd.to_datetime(display_df['timestamp_share'], unit='s', utc=True)
 
-        if not st.session_state.other_df.empty:
-            with st.expander("🔍 Full Metadata Columns"):
-                st.dataframe(st.session_state.other_df.head(20), use_container_width=True)
+        st.markdown("### 📋 Raw Data Sample (First 10 Rows)")
+        st.dataframe(display_df[['account_id', 'content_id', 'object_id', 'date_utc']].head(10), use_container_width=True)
 
         top_influencers = st.session_state.core_df['account_id'].value_counts().head(10)
         fig_influencers = px.bar(top_influencers, title="Top 10 Influencers", labels={'value': 'Number of Posts', 'index': 'Account'})
@@ -413,8 +428,8 @@ with tab1:
         fig_ts = px.line(time_series, title="Daily Post Volume", labels={'value': 'Number of Posts', 'index': 'Date'})
         st.plotly_chart(fig_ts, use_container_width=True)
 
-        if 'Platform' in st.session_state.core_df.columns:
-            platform_counts = st.session_state.core_df['Platform'].value_counts()
+        if 'Platform' in st.session_state.other_df.columns:
+            platform_counts = st.session_state.other_df['Platform'].value_counts()
             fig_platform = px.bar(platform_counts, title="Posts by Platform", labels={'value': 'Count', 'index': 'Platform'})
             st.plotly_chart(fig_platform, use_container_width=True)
     else:
