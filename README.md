@@ -39,4 +39,4 @@ Your dataset should include at least the following columns:
 ### 1. Clone the repository
 
 ```bash
-git clone
+git clone https://github.com/hanna-tes/CIB-network-monitoring.git
